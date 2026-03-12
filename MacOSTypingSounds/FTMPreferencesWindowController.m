@@ -4,7 +4,64 @@
 @class FTMProfileMappingWindowController;
 @class FTMAppRoutingWindowController;
 
-@interface FTMProfileMappingWindowController : NSWindowController <NSTableViewDataSource, NSTableViewDelegate>
+static NSString *FTMWarningsAlertBody(NSArray<NSString *> *warnings) {
+    if (warnings.count == 0) {
+        return @"";
+    }
+    NSUInteger maxLines = MIN((NSUInteger)10, warnings.count);
+    NSArray<NSString *> *snippet = [warnings subarrayWithRange:NSMakeRange(0, maxLines)];
+    NSString *body = [snippet componentsJoinedByString:@"\n"];
+    if (warnings.count > maxLines) {
+        body = [body stringByAppendingFormat:@"\n… and %lu more", (unsigned long)(warnings.count - maxLines)];
+    }
+    return [body stringByAppendingFormat:@"\n\nTotal warnings: %lu", (unsigned long)warnings.count];
+}
+
+static void FTMPresentWarningsAlert(NSArray<NSString *> *warnings, NSString *title) {
+    if (warnings.count == 0) {
+        return;
+    }
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.alertStyle = NSAlertStyleInformational;
+    alert.messageText = title ?: @"Warnings";
+    alert.informativeText = FTMWarningsAlertBody(warnings);
+    [alert addButtonWithTitle:@"OK"];
+    [alert runModal];
+}
+
+static BOOL FTMHasVisibleSettingsWindow(void) {
+    for (NSWindow *window in [NSApp windows]) {
+        if (!window.isVisible) {
+            continue;
+        }
+        if ((window.styleMask & NSWindowStyleMaskTitled) == 0) {
+            continue;
+        }
+        return YES;
+    }
+    return NO;
+}
+
+static void FTMUpdateActivationPolicyForSettingsWindows(void) {
+    NSApplicationActivationPolicy targetPolicy = FTMHasVisibleSettingsWindow()
+        ? NSApplicationActivationPolicyRegular
+        : NSApplicationActivationPolicyAccessory;
+    [NSApp setActivationPolicy:targetPolicy];
+}
+
+static void FTMPresentSettingsWindow(NSWindow *window) {
+    if (!window) {
+        return;
+    }
+    window.hidesOnDeactivate = NO;
+    window.collectionBehavior |= NSWindowCollectionBehaviorMoveToActiveSpace;
+    [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+    [window makeKeyAndOrderFront:nil];
+    [window orderFrontRegardless];
+    [NSApp activateIgnoringOtherApps:YES];
+}
+
+@interface FTMProfileMappingWindowController : NSWindowController <NSTableViewDataSource, NSTableViewDelegate, NSWindowDelegate>
 @property (nonatomic, copy, nullable) void (^onProfileDataChanged)(NSString *profileID);
 - (instancetype)initWithProfileStore:(FTMProfileStore *)profileStore
                             importer:(FTMSoundPackImporter *)importer
@@ -13,7 +70,7 @@
 - (void)presentForProfile:(FTMProfile *)profile;
 @end
 
-@interface FTMAppRoutingWindowController : NSWindowController <NSTableViewDataSource, NSTableViewDelegate>
+@interface FTMAppRoutingWindowController : NSWindowController <NSTableViewDataSource, NSTableViewDelegate, NSWindowDelegate>
 @property (nonatomic, copy, nullable) void (^onRulesChanged)(void);
 - (instancetype)initWithProfileStore:(FTMProfileStore *)profileStore;
 - (void)presentWindow;
@@ -32,6 +89,7 @@
 @property (nonatomic, strong) NSArray<FTMProfileAsset *> *assignedAssets;
 @property (nonatomic, strong) NSArray<FTMProfileAsset *> *libraryAssets;
 @property (nonatomic, strong) NSArray<FTMProfileAsset *> *allAssets;
+@property (nonatomic, strong) NSSet<NSString *> *unassignedAssetIDs;
 @property (nonatomic, strong) NSTextField *profileLabel;
 @property (nonatomic, strong) NSTextField *warningLabel;
 @property (nonatomic, strong) NSTableView *slotsTableView;
@@ -59,6 +117,7 @@
                                                        defer:NO];
     window.title = @"Sound Mapping";
     window.releasedWhenClosed = NO;
+    window.delegate = self;
 
     self = [super initWithWindow:window];
     if (self) {
@@ -71,6 +130,7 @@
         _assignedAssets = @[];
         _libraryAssets = @[];
         _allAssets = @[];
+        _unassignedAssetIDs = [NSSet set];
         [self buildUI];
     }
     return self;
@@ -80,8 +140,7 @@
     self.profile = profile;
     [self reloadUI];
     [self showWindow:nil];
-    [self.window makeKeyAndOrderFront:nil];
-    [NSApp activateIgnoringOtherApps:YES];
+    FTMPresentSettingsWindow(self.window);
 }
 
 - (void)buildUI {
@@ -220,6 +279,7 @@
         [filtered addObject:asset];
     }
     self.allAssets = allAssets;
+    self.unassignedAssetIDs = unassignedIDs;
     self.libraryAssets = [filtered copy];
     [self.libraryTableView reloadData];
 }
@@ -446,7 +506,7 @@
     if (tableView == self.libraryTableView) {
         if (row < 0 || row >= (NSInteger)self.libraryAssets.count) { return @""; }
         FTMProfileAsset *asset = self.libraryAssets[(NSUInteger)row];
-        BOOL isUnassigned = [[NSSet setWithArray:[[self.profileStore unassignedAssetsForProfile:self.profile] valueForKey:@"assetID"]] containsObject:asset.assetID];
+        BOOL isUnassigned = [self.unassignedAssetIDs containsObject:asset.assetID];
         return isUnassigned ? [NSString stringWithFormat:@"%@ (Unassigned)", asset.displayName ?: asset.storedFileName ?: @""] : (asset.displayName ?: asset.storedFileName ?: @"");
     }
     return @"";
@@ -474,19 +534,14 @@
 }
 
 - (void)showWarnings:(NSArray<NSString *> *)warnings title:(NSString *)title {
-    if (warnings.count == 0) { return; }
-    NSAlert *alert = [[NSAlert alloc] init];
-    alert.alertStyle = NSAlertStyleInformational;
-    alert.messageText = title ?: @"Warnings";
-    NSUInteger maxLines = MIN((NSUInteger)12, warnings.count);
-    NSArray<NSString *> *snippet = [warnings subarrayWithRange:NSMakeRange(0, maxLines)];
-    NSString *body = [snippet componentsJoinedByString:@"\n"];
-    if (warnings.count > maxLines) {
-        body = [body stringByAppendingFormat:@"\n… and %lu more", (unsigned long)(warnings.count - maxLines)];
-    }
-    alert.informativeText = body;
-    [alert addButtonWithTitle:@"OK"];
-    [alert runModal];
+    FTMPresentWarningsAlert(warnings, title);
+}
+
+- (void)windowWillClose:(NSNotification *)notification {
+    (void)notification;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        FTMUpdateActivationPolicyForSettingsWindows();
+    });
 }
 
 @end
@@ -511,6 +566,7 @@
                                                        defer:NO];
     window.title = @"App Routing";
     window.releasedWhenClosed = NO;
+    window.delegate = self;
     self = [super initWithWindow:window];
     if (self) {
         _profileStore = profileStore;
@@ -524,8 +580,7 @@
 - (void)presentWindow {
     [self reloadUI];
     [self showWindow:nil];
-    [self.window makeKeyAndOrderFront:nil];
-    [NSApp activateIgnoringOtherApps:YES];
+    FTMPresentSettingsWindow(self.window);
 }
 
 - (void)buildUI {
@@ -799,6 +854,13 @@
     [alert runModal];
 }
 
+- (void)windowWillClose:(NSNotification *)notification {
+    (void)notification;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        FTMUpdateActivationPolicyForSettingsWindows();
+    });
+}
+
 @end
 
 @interface FTMPreferencesWindowController ()
@@ -812,7 +874,7 @@
 @property (nonatomic, strong) NSTableView *filesTableView;
 
 @property (nonatomic, strong) NSButton *muteCheckbox;
-@property (nonatomic, strong) NSButton *terminalOnlyCheckbox;
+@property (nonatomic, strong) NSButton *assignedAppsOnlyCheckbox;
 @property (nonatomic, strong) NSTextField *editingProfileLabel;
 @property (nonatomic, strong) NSTextField *activeProfileLabel;
 @property (nonatomic, strong) NSTextField *helpTextLabel;
@@ -850,6 +912,7 @@
                                                        defer:NO];
     window.title = @"Preferences";
     window.releasedWhenClosed = NO;
+    window.delegate = self;
 
     self = [super initWithWindow:window];
     if (self) {
@@ -870,8 +933,7 @@
 - (void)presentWindow {
     [self reloadAllUI];
     [self showWindow:nil];
-    [self.window makeKeyAndOrderFront:nil];
-    [NSApp activateIgnoringOtherApps:YES];
+    FTMPresentSettingsWindow(self.window);
 }
 
 - (void)reloadAllUI {
@@ -945,15 +1007,15 @@
     [rightPane addSubview:[self label:@"Profile Editor" frame:NSMakeRect(16, 666, 200, 20) bold:YES]];
     self.editingProfileLabel = [self label:@"Editing: (none)" frame:NSMakeRect(16, 640, 420, 20) bold:NO];
     [rightPane addSubview:self.editingProfileLabel];
-    self.activeProfileLabel = [self label:@"Default (Unassigned): (none)" frame:NSMakeRect(16, 616, 420, 20) bold:NO];
+    self.activeProfileLabel = [self label:@"Default Profile (Unassigned Apps): (none)" frame:NSMakeRect(16, 616, 420, 20) bold:NO];
     [rightPane addSubview:self.activeProfileLabel];
     self.routingSummaryLabel = [self label:@"App Routing: 0 assignments" frame:NSMakeRect(16, 592, 420, 20) bold:NO];
     [rightPane addSubview:self.routingSummaryLabel];
 
     self.muteCheckbox = [self checkbox:@"Mute SFX" action:@selector(handleMuteToggle:) frame:NSMakeRect(470, 640, 180, 20)];
     [rightPane addSubview:self.muteCheckbox];
-    self.terminalOnlyCheckbox = [self checkbox:@"Play SFX in assigned apps only" action:@selector(handleTerminalOnlyToggle:) frame:NSMakeRect(470, 616, 300, 20)];
-    [rightPane addSubview:self.terminalOnlyCheckbox];
+    self.assignedAppsOnlyCheckbox = [self checkbox:@"Play SFX in assigned apps only" action:@selector(handleAssignedAppsOnlyToggle:) frame:NSMakeRect(470, 616, 300, 20)];
+    [rightPane addSubview:self.assignedAppsOnlyCheckbox];
     self.editSoundMappingButton = [self button:@"Edit Sound Mapping…" action:@selector(handleEditSoundMapping:) frame:NSMakeRect(470, 584, 150, 28)];
     [rightPane addSubview:self.editSoundMappingButton];
     self.manageAppRoutingButton = [self button:@"Manage App Routing…" action:@selector(handleManageAppRouting:) frame:NSMakeRect(626, 584, 148, 28)];
@@ -1083,7 +1145,7 @@
 - (void)refreshGlobalSettingsUI {
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
     self.muteCheckbox.state = [defaults boolForKey:FTMDefaultsKeyMuted] ? NSControlStateValueOn : NSControlStateValueOff;
-    self.terminalOnlyCheckbox.state = [defaults boolForKey:FTMDefaultsKeyAssignedAppsOnly] ? NSControlStateValueOn : NSControlStateValueOff;
+    self.assignedAppsOnlyCheckbox.state = FTMReadAssignedAppsOnlyFromDefaults(defaults) ? NSControlStateValueOn : NSControlStateValueOff;
 }
 
 - (void)refreshProfileDependentUI {
@@ -1091,7 +1153,7 @@
     FTMProfile *active = self.profileStore.activeProfile;
 
     self.editingProfileLabel.stringValue = [NSString stringWithFormat:@"Editing: %@", selected.name ?: @"(none)"];
-    self.activeProfileLabel.stringValue = [NSString stringWithFormat:@"Default (Unassigned Apps): %@", active.name ?: @"(none)"];
+    self.activeProfileLabel.stringValue = [NSString stringWithFormat:@"Default Profile (Unassigned Apps): %@", active.name ?: @"(none)"];
     self.routingSummaryLabel.stringValue = [NSString stringWithFormat:@"App Routing: %lu assignments", (unsigned long)self.profileStore.appRules.count];
 
     self.slotCounts = [self.profileStore slotFileCountsForProfile:selected];
@@ -1364,9 +1426,10 @@
     [self refreshGlobalSettingsUI];
 }
 
-- (void)handleTerminalOnlyToggle:(id)sender {
+- (void)handleAssignedAppsOnlyToggle:(id)sender {
     (void)sender;
-    [[NSUserDefaults standardUserDefaults] setBool:(self.terminalOnlyCheckbox.state == NSControlStateValueOn) forKey:FTMDefaultsKeyAssignedAppsOnly];
+    FTMWriteAssignedAppsOnlyToDefaults([NSUserDefaults standardUserDefaults], (self.assignedAppsOnlyCheckbox.state == NSControlStateValueOn));
+    [self.soundResolver invalidateCache];
     if (self.onSettingsChanged) {
         self.onSettingsChanged();
     }
@@ -1409,6 +1472,7 @@
         self.appRoutingWindowController.onRulesChanged = ^{
             __strong typeof(weakSelf) self = weakSelf;
             if (!self) { return; }
+            [self.soundResolver invalidateCache];
             if (self.onProfilesChanged) {
                 self.onProfilesChanged();
             }
@@ -1477,7 +1541,9 @@
 #pragma mark - Utilities
 
 - (void)notifyProfilesChangedAndReloadSelectingProfileID:(NSString *)profileID invalidateResolver:(BOOL)invalidateResolver {
-    (void)invalidateResolver;
+    if (invalidateResolver) {
+        [self.soundResolver invalidateCache];
+    }
     if (self.onProfilesChanged) {
         self.onProfilesChanged();
     }
@@ -1507,22 +1573,14 @@
 }
 
 - (void)presentWarnings:(NSArray<NSString *> *)warnings title:(NSString *)title {
-    if (warnings.count == 0) {
-        return;
-    }
-    NSAlert *alert = [[NSAlert alloc] init];
-    alert.alertStyle = NSAlertStyleInformational;
-    alert.messageText = title ?: @"Warnings";
-    NSUInteger maxLines = MIN((NSUInteger)10, warnings.count);
-    NSArray<NSString *> *snippet = [warnings subarrayWithRange:NSMakeRange(0, maxLines)];
-    NSString *body = [snippet componentsJoinedByString:@"\n"];
-    if (warnings.count > maxLines) {
-        body = [body stringByAppendingFormat:@"\n… and %lu more", (unsigned long)(warnings.count - maxLines)];
-    }
-    body = [body stringByAppendingFormat:@"\n\nTotal warnings: %lu", (unsigned long)warnings.count];
-    alert.informativeText = body;
-    [alert addButtonWithTitle:@"OK"];
-    [alert runModal];
+    FTMPresentWarningsAlert(warnings, title);
+}
+
+- (void)windowWillClose:(NSNotification *)notification {
+    (void)notification;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        FTMUpdateActivationPolicyForSettingsWindows();
+    });
 }
 
 - (NSString *)promptForTextWithTitle:(NSString *)title message:(NSString *)message defaultValue:(NSString *)defaultValue {
