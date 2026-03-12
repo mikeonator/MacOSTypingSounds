@@ -53,7 +53,6 @@
     [self installWorkspaceObservers];
     [self setupStatusItem];
     [self setMenuItems];
-    [self requestAccessibilityAccessIfNeeded];
 }
 
 - (void)applicationWillTerminate:(NSNotification *)aNotification {
@@ -168,12 +167,12 @@
     appRoutingItem.target = self;
     [menu addItem:appRoutingItem];
 
-    BOOL accessibilityGranted = [self hasAccessibilityAccess];
-    NSMenuItem *accessibilityItem = [[NSMenuItem alloc] initWithTitle:(accessibilityGranted ? @"Accessibility Access Granted" : @"Request Accessibility Access…")
-                                                              action:@selector(requestAccessibilityAccess:)
+    BOOL keyboardAccessGranted = [self hasKeyboardMonitoringAccess];
+    NSMenuItem *accessibilityItem = [[NSMenuItem alloc] initWithTitle:(keyboardAccessGranted ? @"Keyboard Access Granted" : @"Request Keyboard Access…")
+                                                              action:@selector(requestKeyboardAccess:)
                                                        keyEquivalent:@""];
     accessibilityItem.target = self;
-    accessibilityItem.enabled = !accessibilityGranted;
+    accessibilityItem.enabled = !keyboardAccessGranted;
     [menu addItem:accessibilityItem];
 
     NSMenuItem *preferencesItem = [[NSMenuItem alloc] initWithTitle:@"Preferences…"
@@ -280,6 +279,12 @@
 
 - (void)requestAccessibilityAccess:(id)sender {
     (void)sender;
+    [self requestKeyboardAccess:nil];
+}
+
+- (void)requestKeyboardAccess:(id)sender {
+    (void)sender;
+    [self requestInputMonitoringAccessPrompting:YES];
     [self requestAccessibilityAccessPrompting:YES];
     [self setMenuItems];
 }
@@ -342,19 +347,30 @@
     return AXIsProcessTrusted();
 }
 
-- (void)requestAccessibilityAccessIfNeeded {
-    if ([self hasAccessibilityAccess]) {
-        return;
+- (BOOL)hasInputMonitoringAccess {
+    if (@available(macOS 10.15, *)) {
+        return CGPreflightListenEventAccess();
     }
-    dispatch_async(dispatch_get_main_queue(), ^{
-        [self requestAccessibilityAccessPrompting:YES];
-        [self setMenuItems];
-    });
+    return YES;
+}
+
+- (BOOL)hasKeyboardMonitoringAccess {
+    return [self hasAccessibilityAccess] || [self hasInputMonitoringAccess];
 }
 
 - (BOOL)requestAccessibilityAccessPrompting:(BOOL)shouldPrompt {
     NSDictionary *options = shouldPrompt ? @{ (__bridge NSString *)kAXTrustedCheckOptionPrompt: @YES } : @{};
     return AXIsProcessTrustedWithOptions((__bridge CFDictionaryRef)options);
+}
+
+- (BOOL)requestInputMonitoringAccessPrompting:(BOOL)shouldPrompt {
+    if (@available(macOS 10.15, *)) {
+        if (shouldPrompt) {
+            return CGRequestListenEventAccess();
+        }
+        return CGPreflightListenEventAccess();
+    }
+    return YES;
 }
 
 #pragma mark - Routing
