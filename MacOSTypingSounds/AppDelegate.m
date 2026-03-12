@@ -49,7 +49,7 @@
         [self presentStartupError:loadError];
     }
 
-    [self installGlobalKeyMonitor];
+    [self refreshGlobalKeyMonitor];
     [self installWorkspaceObservers];
     [self setupStatusItem];
     [self setMenuItems];
@@ -66,7 +66,11 @@
 
 #pragma mark - Setup
 
-- (void)installGlobalKeyMonitor {
+- (void)refreshGlobalKeyMonitor {
+    if (self.globalKeyMonitor) {
+        [NSEvent removeMonitor:self.globalKeyMonitor];
+        self.globalKeyMonitor = nil;
+    }
     __weak typeof(self) weakSelf = self;
     self.globalKeyMonitor = [NSEvent addGlobalMonitorForEventsMatchingMask:NSEventMaskKeyDown handler:^(NSEvent *event) {
         __strong typeof(weakSelf) self = weakSelf;
@@ -286,7 +290,14 @@
     (void)sender;
     [self requestInputMonitoringAccessPrompting:YES];
     [self requestAccessibilityAccessPrompting:YES];
+    [self refreshGlobalKeyMonitor];
     [self setMenuItems];
+
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [self refreshGlobalKeyMonitor];
+        [self setMenuItems];
+        [self.preferencesWindowController reloadAllUI];
+    });
 }
 
 #pragma mark - App Launch/Quit Sounds
@@ -317,6 +328,7 @@
 
 - (void)applicationActivated:(NSNotification *)notification {
     (void)notification;
+    [self refreshGlobalKeyMonitor];
     [self setMenuItems];
     [self.preferencesWindowController reloadAllUI];
 }
@@ -355,7 +367,10 @@
 }
 
 - (BOOL)hasKeyboardMonitoringAccess {
-    return [self hasAccessibilityAccess] || [self hasInputMonitoringAccess];
+    if (@available(macOS 10.15, *)) {
+        return [self hasInputMonitoringAccess];
+    }
+    return [self hasAccessibilityAccess];
 }
 
 - (BOOL)requestAccessibilityAccessPrompting:(BOOL)shouldPrompt {
