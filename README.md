@@ -1,82 +1,68 @@
 # MacOSTypingSounds
-Simple app that plays keystroke sounds on your computer like the terminals in Fallout 3 / NV. Also plays terminal start up / shut down sounds anytime you launch mac terminal / iterm2.
 
-#Features and Settings
-- Toggle mute 
-- Toggle whether to play sounds outside terminals 
-  - compatible with Cool CRT https://github.com/Swordfish90/cool-retro-term
+Mac menu bar app that plays keyboard and app event sounds with profile-based routing.
 
-#Installation
-Requires Mac OS X 10. It hasn't been tested on any other versions but it SHOULD work run on earlier versions up to snow leopard.
+## What It Does
 
-- Download Xcode and open the project on there.
-- Export a binary by selecting product > archive > export > export as a Mac application.
-- In order to hear the sounds, you must give permissions to your exported binary under preferences > security & privacy > privacy > Accessibility (add the exported app here)
+- Plays typing sounds from a selected/default profile.
+- Supports per-app profile routing by bundle identifier.
+- Plays assigned profile sounds for app launch and app quit events.
+- Lets you run in two modes:
+  - `Play SFX in all apps` (unassigned apps use default profile)
+  - `Play SFX in assigned apps only` (unassigned apps are silent)
+- Supports profile management (create, duplicate, rename, delete).
+- Supports flat soundpack import (recursive import; folder names are ignored).
+- Supports in-app slot mapping:
+  - `typing`, `enter`, `backspace`, `tab`, `space`, `escape`, `launch`, `quit`
 
-# Custom Soundpacks + App Routing (v2)
+## Sound Import Support
 
-This fork now supports:
+- Supported file types: `.mp3`, `.wav`, `.m4a`, `.aiff`, `.ogg`
+- `.ogg` files are converted to `.wav` on import and stored in the profile library.
 
-- Profile-based sound libraries
-- Flat soundpack import (folder names are ignored)
-- In-app slot mapping (`typing`, `enter`, `launch`, `quit`, etc.)
-- App-specific profile routing by bundle identifier (exact match)
-- App launch/quit sounds for assigned apps
+## Slot Fallback Behavior
 
-## V2 Workflow (Flat Import + Mapping)
+- Empty key slots (`enter`, `backspace`, `tab`, `space`, `escape`) fall back to `typing`.
+- Empty `launch` / `quit` fall back to bundled power sounds.
+- Empty `typing` falls back to bundled typing sounds.
+
+## Permissions
+
+For global keyboard/event behavior, grant the app:
+
+- Accessibility
+- Input Monitoring
+
+You can request these from the app menu (`Request Keyboard Access…`) or in macOS Privacy & Security settings.
+
+## Build And Run
+
+### Xcode
+
+1. Open `MacOSTypingSounds.xcodeproj`.
+2. Build/run the `MacOSTypingSounds` scheme.
+
+### CLI
+
+```bash
+xcodebuild -project MacOSTypingSounds.xcodeproj -scheme MacOSTypingSounds -configuration Debug CODE_SIGNING_ALLOWED=NO build
+```
+
+## Quick Usage Flow
 
 1. Launch the app.
-2. Open the status menu and choose `Preferences…`.
-3. Create or select a profile.
-4. Click `Import Pack…` (creates a profile and imports audio recursively as a flat library).
-5. Click `Edit Sound Mapping…` for that profile.
-6. Assign imported sounds to slots (`typing`, `enter`, `backspace`, `tab`, `space`, `escape`, `launch`, `quit`).
-7. Click `Manage App Routing…` and assign apps (bundle IDs) to profiles.
+2. Open menu bar item -> `Preferences…`.
+3. Create/select a profile.
+4. Import a pack (`Import Pack…`) or add files.
+5. Open `Edit Sound Mapping…` and assign assets to slots.
+6. Open `Manage App Routing…` and assign apps to profiles.
 
-Example pack (still useful in v2):
+Sample pack:
 
 - `/Users/mikeonator/Documents/Code/MacOSTypingSounds/Examples/SampleClickPack`
 
-In v2, the folders inside that sample pack are treated as organization only. The app imports audio files recursively and you assign slots in the Sound Mapping window.
+## Test
 
-## App Routing (v2)
-
-- Routing uses exact bundle ID matching (example: `com.apple.Terminal`, `com.microsoft.VSCode`)
-- Assigned apps use their profile for:
-  - typing sounds
-  - app launch sound (`launch` slot)
-  - app quit sound (`quit` slot)
-- Unassigned apps use the selected default profile (`Default Profile (Unassigned Apps)`) unless `Play SFX in assigned apps only` is enabled
-
-## Slot Fallbacks
-
-- Empty key slots (`enter`, `backspace`, `tab`, `space`, `escape`) fall back to `typing`
-- Empty `launch` / `quit` slots fall back to bundled power sounds
-- Empty `typing` falls back to bundled typing sounds
-
-## Supported Import Types
-
-- `.mp3`, `.wav`, `.m4a`, `.aiff`, `.ogg` (Ogg Vorbis)
-
-`.ogg` note:
-
-- Ogg Vorbis files are converted to `.wav` during import
-- Converted files are stored in the profile's app-managed sound library
-
-## QA Notes
-
-- v1 QA checklist/results: `/Users/mikeonator/Documents/Code/MacOSTypingSounds/docs/qa-v1-profiles.md`
-- v2 QA checklist/results: `/Users/mikeonator/Documents/Code/MacOSTypingSounds/docs/qa-v2-app-routing.md`
-
-
-# My Terminal
-You can check out a photo of my terminal
-[here](http://i.imgur.com/hzIx86R.png)
-
-I'm currently using iterm2 with:
-
-Foreground color: #29E18C
-
-Background color: #0E2E20
-
-Text Font: Fixedsys 20
+```bash
+xcodebuild test -project MacOSTypingSounds.xcodeproj -scheme MacOSTypingSounds -destination "platform=macOS" CODE_SIGNING_ALLOWED=NO
+```

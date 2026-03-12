@@ -4,7 +4,7 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
-@interface FTMPreferencesWindowController : NSWindowController <NSTableViewDataSource, NSTableViewDelegate>
+@interface FTMPreferencesWindowController : NSWindowController <NSTableViewDataSource, NSTableViewDelegate, NSWindowDelegate>
 @property (nonatomic, copy, nullable) void (^onProfilesChanged)(void);
 @property (nonatomic, copy, nullable) void (^onSettingsChanged)(void);
 

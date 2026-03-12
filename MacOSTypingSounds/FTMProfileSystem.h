@@ -5,6 +5,7 @@ NS_ASSUME_NONNULL_BEGIN
 FOUNDATION_EXPORT NSString * const FTMDefaultsKeyTerminalsOnly;
 FOUNDATION_EXPORT NSString * const FTMDefaultsKeyMuted;
 FOUNDATION_EXPORT NSString * const FTMDefaultsKeyActiveProfileID;
+FOUNDATION_EXPORT NSString * const FTMDefaultsKeyRoutingAssignedAppsOnly;
 FOUNDATION_EXPORT NSString * const FTMDefaultsKeyAssignedAppsOnly;
 FOUNDATION_EXPORT NSString * const FTMDefaultsKeyDidMigrateV2Routing;
 
@@ -32,6 +33,9 @@ FOUNDATION_EXPORT NSArray<NSString *> *FTMAllSoundSlotIDs(void);
 FOUNDATION_EXPORT NSString *FTMDisplayNameForSoundSlot(NSString *slotID);
 FOUNDATION_EXPORT NSString *FTMFolderNameForSoundSlot(NSString *slotID);
 FOUNDATION_EXPORT NSArray<NSString *> *FTMSupportedImportExtensions(void);
+FOUNDATION_EXPORT BOOL FTMReadAssignedAppsOnlyFromDefaults(NSUserDefaults *defaults);
+FOUNDATION_EXPORT void FTMWriteAssignedAppsOnlyToDefaults(NSUserDefaults *defaults, BOOL enabled);
+FOUNDATION_EXPORT void FTMBackfillAssignedAppsOnlyDefaultsIfNeeded(NSUserDefaults *defaults);
 
 @interface FTMProfile : NSObject <NSCopying>
 @property (nonatomic, copy) NSString *profileID;

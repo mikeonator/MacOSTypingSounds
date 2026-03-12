@@ -32,8 +32,6 @@
 
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
     [defaults registerDefaults:@{
-        FTMDefaultsKeyTerminalsOnly: @NO,
-        FTMDefaultsKeyAssignedAppsOnly: @NO,
         FTMDefaultsKeyMuted: @NO,
     }];
 
@@ -130,7 +128,7 @@
         return YES;
     }
     if (event.keyCode == kVK_ANSI_L) {
-        [self togglePlayMode];
+        [self toggleAssignedAppsOnlyMode];
         return YES;
     }
     return NO;
@@ -148,9 +146,9 @@
     [muteItem setKeyEquivalentModifierMask:(NSEventModifierFlagShift | NSEventModifierFlagCommand | NSEventModifierFlagControl)];
     [menu addItem:muteItem];
 
-    BOOL assignedAppsOnly = [[NSUserDefaults standardUserDefaults] boolForKey:FTMDefaultsKeyAssignedAppsOnly];
-    NSMenuItem *playModeItem = [[NSMenuItem alloc] initWithTitle:(assignedAppsOnly ? @"Play SFX always (use default for unassigned apps)" : @"Play SFX in assigned apps only")
-                                                          action:@selector(togglePlayMode)
+    BOOL assignedAppsOnly = FTMReadAssignedAppsOnlyFromDefaults([NSUserDefaults standardUserDefaults]);
+    NSMenuItem *playModeItem = [[NSMenuItem alloc] initWithTitle:(assignedAppsOnly ? @"Play SFX in all apps (use default profile for unassigned apps)" : @"Play SFX in assigned apps only")
+                                                          action:@selector(toggleAssignedAppsOnlyMode)
                                                    keyEquivalent:@"l"];
     playModeItem.target = self;
     [playModeItem setKeyEquivalentModifierMask:(NSEventModifierFlagShift | NSEventModifierFlagCommand | NSEventModifierFlagControl)];
@@ -241,11 +239,11 @@
     [self.preferencesWindowController reloadAllUI];
 }
 
-- (void)togglePlayMode {
+- (void)toggleAssignedAppsOnlyMode {
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
-    BOOL assignedAppsOnly = [defaults boolForKey:FTMDefaultsKeyAssignedAppsOnly];
-    // ON means "assigned apps only". Menu text toggles between the opposite labels.
-    [defaults setBool:!assignedAppsOnly forKey:FTMDefaultsKeyAssignedAppsOnly];
+    BOOL assignedAppsOnly = FTMReadAssignedAppsOnlyFromDefaults(defaults);
+    FTMWriteAssignedAppsOnlyToDefaults(defaults, !assignedAppsOnly);
+    [self.soundResolver invalidateCache];
     [self setMenuItems];
     [self.preferencesWindowController reloadAllUI];
 }
@@ -396,7 +394,7 @@
     if (assigned) {
         return assigned;
     }
-    BOOL assignedAppsOnly = [[NSUserDefaults standardUserDefaults] boolForKey:FTMDefaultsKeyAssignedAppsOnly];
+    BOOL assignedAppsOnly = FTMReadAssignedAppsOnlyFromDefaults([NSUserDefaults standardUserDefaults]);
     if (assignedAppsOnly) {
         return nil;
     }
@@ -410,12 +408,12 @@
     if (assigned) {
         return [NSString stringWithFormat:@"Current App: %@ -> %@", appName, assigned.name ?: @"Profile"];
     }
-    BOOL assignedAppsOnly = [[NSUserDefaults standardUserDefaults] boolForKey:FTMDefaultsKeyAssignedAppsOnly];
+    BOOL assignedAppsOnly = FTMReadAssignedAppsOnlyFromDefaults([NSUserDefaults standardUserDefaults]);
     if (assignedAppsOnly) {
-        return [NSString stringWithFormat:@"Current App: %@ -> Silent (Unassigned)", appName];
+        return [NSString stringWithFormat:@"Current App: %@ -> Silent (Unassigned App)", appName];
     }
     FTMProfile *fallback = [self.profileStore activeProfile];
-    return [NSString stringWithFormat:@"Current App: %@ -> Default (%@)", appName, fallback.name ?: @"Profile"];
+    return [NSString stringWithFormat:@"Current App: %@ -> Default Profile (%@)", appName, fallback.name ?: @"Profile"];
 }
 
 enum {

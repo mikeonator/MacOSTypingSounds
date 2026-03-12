@@ -8,6 +8,7 @@
 NSString * const FTMDefaultsKeyTerminalsOnly = @"terminalsOnly";
 NSString * const FTMDefaultsKeyMuted = @"isMuted";
 NSString * const FTMDefaultsKeyActiveProfileID = @"activeProfileID";
+NSString * const FTMDefaultsKeyRoutingAssignedAppsOnly = @"routingAssignedAppsOnly";
 NSString * const FTMDefaultsKeyAssignedAppsOnly = @"assignedAppsOnly";
 NSString * const FTMDefaultsKeyDidMigrateV2Routing = @"didMigrateV2Routing";
 
@@ -55,6 +56,58 @@ static NSArray<NSString *> *FTMSlotOrder(void) {
         ];
     });
     return slots;
+}
+
+static BOOL FTMDefaultsHasKey(NSUserDefaults *defaults, NSString *key) {
+    if (!defaults || key.length == 0) {
+        return NO;
+    }
+    return ([defaults objectForKey:key] != nil);
+}
+
+BOOL FTMReadAssignedAppsOnlyFromDefaults(NSUserDefaults *defaults) {
+    if (FTMDefaultsHasKey(defaults, FTMDefaultsKeyRoutingAssignedAppsOnly)) {
+        return [defaults boolForKey:FTMDefaultsKeyRoutingAssignedAppsOnly];
+    }
+    if (FTMDefaultsHasKey(defaults, FTMDefaultsKeyAssignedAppsOnly)) {
+        return [defaults boolForKey:FTMDefaultsKeyAssignedAppsOnly];
+    }
+    if (FTMDefaultsHasKey(defaults, FTMDefaultsKeyTerminalsOnly)) {
+        return [defaults boolForKey:FTMDefaultsKeyTerminalsOnly];
+    }
+    return NO;
+}
+
+void FTMWriteAssignedAppsOnlyToDefaults(NSUserDefaults *defaults, BOOL enabled) {
+    if (!defaults) {
+        return;
+    }
+    [defaults setBool:enabled forKey:FTMDefaultsKeyRoutingAssignedAppsOnly];
+    [defaults setBool:enabled forKey:FTMDefaultsKeyAssignedAppsOnly];
+}
+
+void FTMBackfillAssignedAppsOnlyDefaultsIfNeeded(NSUserDefaults *defaults) {
+    if (!defaults) {
+        return;
+    }
+    BOOL hasCanonical = FTMDefaultsHasKey(defaults, FTMDefaultsKeyRoutingAssignedAppsOnly);
+    BOOL hasLegacyV2 = FTMDefaultsHasKey(defaults, FTMDefaultsKeyAssignedAppsOnly);
+    if (hasCanonical) {
+        if (!hasLegacyV2) {
+            [defaults setBool:[defaults boolForKey:FTMDefaultsKeyRoutingAssignedAppsOnly] forKey:FTMDefaultsKeyAssignedAppsOnly];
+        }
+        return;
+    }
+    if (hasLegacyV2) {
+        BOOL value = [defaults boolForKey:FTMDefaultsKeyAssignedAppsOnly];
+        [defaults setBool:value forKey:FTMDefaultsKeyRoutingAssignedAppsOnly];
+        return;
+    }
+    if (FTMDefaultsHasKey(defaults, FTMDefaultsKeyTerminalsOnly)) {
+        BOOL value = [defaults boolForKey:FTMDefaultsKeyTerminalsOnly];
+        [defaults setBool:value forKey:FTMDefaultsKeyRoutingAssignedAppsOnly];
+        [defaults setBool:value forKey:FTMDefaultsKeyAssignedAppsOnly];
+    }
 }
 
 NSArray<NSString *> *FTMAllSoundSlotIDs(void) {
@@ -824,6 +877,7 @@ static NSString *FTMUniqueProfileName(NSString *desiredName, NSArray<FTMProfile 
         }
     }
 
+    FTMBackfillAssignedAppsOnlyDefaultsIfNeeded(self.defaults);
     [self pruneInvalidAppRules];
     [self migrateLegacyTerminalOnlyToAssignedAppsOnlyIfNeeded];
     return [self saveMetadata:error];
@@ -1665,6 +1719,7 @@ static NSString *FTMUniqueProfileName(NSString *desiredName, NSArray<FTMProfile 
     if ([self.defaults boolForKey:FTMDefaultsKeyDidMigrateV2Routing]) {
         return;
     }
+    FTMBackfillAssignedAppsOnlyDefaultsIfNeeded(self.defaults);
     BOOL legacyTerminalsOnly = [self.defaults boolForKey:FTMDefaultsKeyTerminalsOnly];
     if (!legacyTerminalsOnly) {
         [self.defaults setBool:YES forKey:FTMDefaultsKeyDidMigrateV2Routing];
@@ -1689,7 +1744,7 @@ static NSString *FTMUniqueProfileName(NSString *desiredName, NSArray<FTMProfile 
         rule.updatedAt = now;
         [self.mutableAppRules addObject:rule];
     }
-    [self.defaults setBool:YES forKey:FTMDefaultsKeyAssignedAppsOnly];
+    FTMWriteAssignedAppsOnlyToDefaults(self.defaults, YES);
     [self.defaults setBool:YES forKey:FTMDefaultsKeyDidMigrateV2Routing];
 }
 

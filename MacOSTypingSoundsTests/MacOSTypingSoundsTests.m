@@ -246,6 +246,253 @@
     XCTAssertNotNil([reloaded appRuleForBundleIdentifier:@"com.example.testapp"]);
 }
 
+- (void)testAssignedAppsOnlyDefaultsReadPrecedence {
+    XCTAssertFalse(FTMReadAssignedAppsOnlyFromDefaults(self.testDefaults));
+
+    [self.testDefaults setBool:YES forKey:FTMDefaultsKeyTerminalsOnly];
+    XCTAssertTrue(FTMReadAssignedAppsOnlyFromDefaults(self.testDefaults));
+
+    [self.testDefaults setBool:NO forKey:FTMDefaultsKeyAssignedAppsOnly];
+    XCTAssertFalse(FTMReadAssignedAppsOnlyFromDefaults(self.testDefaults));
+
+    [self.testDefaults setBool:YES forKey:FTMDefaultsKeyRoutingAssignedAppsOnly];
+    XCTAssertTrue(FTMReadAssignedAppsOnlyFromDefaults(self.testDefaults));
+}
+
+- (void)testAssignedAppsOnlyDefaultsWriteSyncsCanonicalAndLegacyV2Key {
+    FTMWriteAssignedAppsOnlyToDefaults(self.testDefaults, YES);
+    XCTAssertTrue([self.testDefaults boolForKey:FTMDefaultsKeyRoutingAssignedAppsOnly]);
+    XCTAssertTrue([self.testDefaults boolForKey:FTMDefaultsKeyAssignedAppsOnly]);
+
+    FTMWriteAssignedAppsOnlyToDefaults(self.testDefaults, NO);
+    XCTAssertFalse([self.testDefaults boolForKey:FTMDefaultsKeyRoutingAssignedAppsOnly]);
+    XCTAssertFalse([self.testDefaults boolForKey:FTMDefaultsKeyAssignedAppsOnly]);
+}
+
+- (void)testBackfillAssignedAppsOnlyDefaultsCopiesLegacyV2Key {
+    [self.testDefaults setBool:YES forKey:FTMDefaultsKeyAssignedAppsOnly];
+    XCTAssertNil([self.testDefaults objectForKey:FTMDefaultsKeyRoutingAssignedAppsOnly]);
+
+    FTMBackfillAssignedAppsOnlyDefaultsIfNeeded(self.testDefaults);
+
+    XCTAssertEqualObjects([self.testDefaults objectForKey:FTMDefaultsKeyRoutingAssignedAppsOnly], @YES);
+    XCTAssertEqualObjects([self.testDefaults objectForKey:FTMDefaultsKeyAssignedAppsOnly], @YES);
+}
+
+- (void)testBackfillAssignedAppsOnlyDefaultsCopiesCanonicalForDowngrade {
+    [self.testDefaults setBool:YES forKey:FTMDefaultsKeyRoutingAssignedAppsOnly];
+    [self.testDefaults removeObjectForKey:FTMDefaultsKeyAssignedAppsOnly];
+    XCTAssertNil([self.testDefaults objectForKey:FTMDefaultsKeyAssignedAppsOnly]);
+
+    FTMBackfillAssignedAppsOnlyDefaultsIfNeeded(self.testDefaults);
+
+    XCTAssertEqualObjects([self.testDefaults objectForKey:FTMDefaultsKeyAssignedAppsOnly], @YES);
+}
+
+- (void)testLoadOrInitializeBackfillsCanonicalAssignedAppsOnlyKey {
+    [self.testDefaults setBool:YES forKey:FTMDefaultsKeyAssignedAppsOnly];
+    XCTAssertNil([self.testDefaults objectForKey:FTMDefaultsKeyRoutingAssignedAppsOnly]);
+
+    FTMProfileStore *store = [[FTMProfileStore alloc] initWithBaseDirectoryURL:self.tempBaseURL defaults:self.testDefaults bundle:[NSBundle mainBundle]];
+    NSError *error = nil;
+    XCTAssertTrue([store loadOrInitialize:&error], @"%@", error);
+    XCTAssertNil(error);
+
+    XCTAssertEqualObjects([self.testDefaults objectForKey:FTMDefaultsKeyRoutingAssignedAppsOnly], @YES);
+    XCTAssertTrue(FTMReadAssignedAppsOnlyFromDefaults(self.testDefaults));
+}
+
+- (void)testLegacyTerminalOnlyMigrationSeedsRulesAndEnablesAssignedAppsOnly {
+    [self.testDefaults setBool:YES forKey:FTMDefaultsKeyTerminalsOnly];
+    [self.testDefaults removeObjectForKey:FTMDefaultsKeyDidMigrateV2Routing];
+    [self.testDefaults removeObjectForKey:FTMDefaultsKeyAssignedAppsOnly];
+    [self.testDefaults removeObjectForKey:FTMDefaultsKeyRoutingAssignedAppsOnly];
+
+    FTMProfileStore *store = [[FTMProfileStore alloc] initWithBaseDirectoryURL:self.tempBaseURL defaults:self.testDefaults bundle:[NSBundle mainBundle]];
+    NSError *error = nil;
+    XCTAssertTrue([store loadOrInitialize:&error], @"%@", error);
+    XCTAssertNil(error);
+
+    XCTAssertTrue([self.testDefaults boolForKey:FTMDefaultsKeyDidMigrateV2Routing]);
+    XCTAssertTrue([self.testDefaults boolForKey:FTMDefaultsKeyRoutingAssignedAppsOnly]);
+    XCTAssertTrue([self.testDefaults boolForKey:FTMDefaultsKeyAssignedAppsOnly]);
+    XCTAssertNotNil([store appRuleForBundleIdentifier:@"com.apple.terminal"]);
+    XCTAssertNotNil([store appRuleForBundleIdentifier:@"com.googlecode.iterm2"]);
+}
+
+- (void)testAppRuleNormalizationDedupesCaseVariants {
+    FTMProfileStore *store = [[FTMProfileStore alloc] initWithBaseDirectoryURL:self.tempBaseURL defaults:self.testDefaults bundle:[NSBundle mainBundle]];
+    XCTAssertTrue([store loadOrInitialize:nil]);
+    FTMProfile *active = [store activeProfile];
+    XCTAssertNotNil(active);
+
+    NSError *error = nil;
+    XCTAssertTrue([store setAppRuleForBundleIdentifier:@"com.Example.MixedCase"
+                                            appNameHint:@"Mixed A"
+                                              profileID:active.profileID
+                                                  error:&error], @"%@", error);
+    XCTAssertNil(error);
+
+    XCTAssertTrue([store setAppRuleForBundleIdentifier:@"COM.EXAMPLE.MIXEDCASE"
+                                            appNameHint:@"Mixed B"
+                                              profileID:active.profileID
+                                                  error:&error], @"%@", error);
+    XCTAssertNil(error);
+
+    XCTAssertEqual(store.appRules.count, (NSUInteger)1);
+    FTMAppProfileRule *rule = [store appRules].firstObject;
+    XCTAssertEqualObjects(rule.bundleIdentifier, @"com.example.mixedcase");
+    XCTAssertEqualObjects(rule.appNameHint, @"Mixed B");
+}
+
+- (void)testPruneInvalidAppRulesRemovesDuplicatesAndMissingProfiles {
+    FTMProfileStore *store = [[FTMProfileStore alloc] initWithBaseDirectoryURL:self.tempBaseURL defaults:self.testDefaults bundle:[NSBundle mainBundle]];
+    NSError *error = nil;
+    XCTAssertTrue([store loadOrInitialize:&error], @"%@", error);
+    XCTAssertNil(error);
+    FTMProfile *active = [store activeProfile];
+    XCTAssertNotNil(active);
+
+    NSDictionary *metadata = @{
+        @"schemaVersion": @3,
+        @"profiles": @[[active dictionaryRepresentation]],
+        @"appRules": @[
+            @{
+                @"bundleIdentifier": @"com.example.keep",
+                @"profileID": active.profileID,
+                @"appNameHint": @"Keep A",
+            },
+            @{
+                @"bundleIdentifier": @"com.example.keep",
+                @"profileID": active.profileID,
+                @"appNameHint": @"Keep B",
+            },
+            @{
+                @"bundleIdentifier": @"",
+                @"profileID": active.profileID,
+            },
+            @{
+                @"bundleIdentifier": @"com.example.missing",
+                @"profileID": @"missing-profile-id",
+            },
+        ],
+    };
+    XCTAssertTrue([metadata writeToURL:store.metadataURL atomically:YES]);
+
+    FTMProfileStore *reloaded = [[FTMProfileStore alloc] initWithBaseDirectoryURL:self.tempBaseURL defaults:self.testDefaults bundle:[NSBundle mainBundle]];
+    XCTAssertTrue([reloaded loadOrInitialize:&error], @"%@", error);
+    XCTAssertNil(error);
+
+    XCTAssertEqual(reloaded.appRules.count, (NSUInteger)1);
+    FTMAppProfileRule *kept = [reloaded appRuleForBundleIdentifier:@"com.example.keep"];
+    XCTAssertNotNil(kept);
+    XCTAssertEqualObjects(kept.appNameHint, @"Keep B");
+}
+
+- (void)testDeleteAssetIDsRemovesAssignmentsAndFileURLs {
+    FTMProfileStore *store = [[FTMProfileStore alloc] initWithBaseDirectoryURL:self.tempBaseURL defaults:self.testDefaults bundle:[NSBundle mainBundle]];
+    XCTAssertTrue([store loadOrInitialize:nil]);
+
+    NSError *error = nil;
+    FTMProfile *profile = [store createEmptyProfileNamed:@"Delete Asset Cascade" error:&error];
+    XCTAssertNotNil(profile);
+    XCTAssertNil(error);
+
+    FTMSoundPackImporter *importer = [[FTMSoundPackImporter alloc] init];
+    NSURL *sourceWavURL = [self.tempBaseURL URLByAppendingPathComponent:@"delete-cascade.wav"];
+    XCTAssertTrue([self writeTinyPCM16WavToURL:sourceWavURL]);
+    XCTAssertTrue([store addAudioFilesAtURLs:@[sourceWavURL]
+                                    toSlotID:FTMSoundSlotTyping
+                                     profile:profile
+                                    importer:importer
+                                    warnings:nil
+                                       error:&error], @"%@", error);
+    XCTAssertNil(error);
+
+    NSArray<FTMProfileAsset *> *assigned = [store assignedAssetsForSlotID:FTMSoundSlotTyping profile:profile];
+    XCTAssertEqual(assigned.count, (NSUInteger)1);
+    NSString *assetID = assigned.firstObject.assetID;
+    NSString *pathBeforeDelete = [store fileURLsForSlotID:FTMSoundSlotTyping profile:profile].firstObject.path;
+    XCTAssertNotNil(pathBeforeDelete);
+
+    XCTAssertTrue([store deleteAssetIDsFromProfile:@[assetID] profile:profile error:&error], @"%@", error);
+    XCTAssertNil(error);
+    XCTAssertEqual([store assetsForProfile:profile].count, (NSUInteger)0);
+    XCTAssertEqual([store assignedAssetsForSlotID:FTMSoundSlotTyping profile:profile].count, (NSUInteger)0);
+    XCTAssertEqual([store fileURLsForSlotID:FTMSoundSlotTyping profile:profile].count, (NSUInteger)0);
+    XCTAssertFalse([[NSFileManager defaultManager] fileExistsAtPath:pathBeforeDelete]);
+}
+
+- (void)testAssignAssetIDsIsIdempotent {
+    FTMProfileStore *store = [[FTMProfileStore alloc] initWithBaseDirectoryURL:self.tempBaseURL defaults:self.testDefaults bundle:[NSBundle mainBundle]];
+    XCTAssertTrue([store loadOrInitialize:nil]);
+
+    NSError *error = nil;
+    FTMProfile *profile = [store createEmptyProfileNamed:@"Assign Idempotent" error:&error];
+    XCTAssertNotNil(profile);
+    XCTAssertNil(error);
+
+    FTMSoundPackImporter *importer = [[FTMSoundPackImporter alloc] init];
+    NSURL *sourceWavURL = [self.tempBaseURL URLByAppendingPathComponent:@"assign-idempotent.wav"];
+    XCTAssertTrue([self writeTinyPCM16WavToURL:sourceWavURL]);
+    XCTAssertTrue([store addAudioFilesToProfileLibrary:@[sourceWavURL]
+                                               profile:profile
+                                              importer:importer
+                                              warnings:nil
+                                                 error:&error], @"%@", error);
+    XCTAssertNil(error);
+
+    NSArray<FTMProfileAsset *> *assets = [store assetsForProfile:profile];
+    XCTAssertEqual(assets.count, (NSUInteger)1);
+    NSString *assetID = assets.firstObject.assetID;
+    NSArray<NSString *> *duplicateIDs = @[assetID, assetID];
+
+    XCTAssertTrue([store assignAssetIDs:duplicateIDs toSlotID:FTMSoundSlotTyping profile:profile error:&error], @"%@", error);
+    XCTAssertTrue([store assignAssetIDs:@[assetID] toSlotID:FTMSoundSlotTyping profile:profile error:&error], @"%@", error);
+    XCTAssertNil(error);
+
+    XCTAssertEqual([store assignedAssetsForSlotID:FTMSoundSlotTyping profile:profile].count, (NSUInteger)1);
+}
+
+- (void)testSoundResolverReflectsUpdatedAssignmentsAfterInvalidateCache {
+    FTMProfileStore *store = [[FTMProfileStore alloc] initWithBaseDirectoryURL:self.tempBaseURL defaults:self.testDefaults bundle:[NSBundle mainBundle]];
+    XCTAssertTrue([store loadOrInitialize:nil]);
+
+    NSError *error = nil;
+    FTMProfile *profile = [store createEmptyProfileNamed:@"Resolver Cache" error:&error];
+    XCTAssertNotNil(profile);
+    XCTAssertNil(error);
+    XCTAssertTrue([store setActiveProfileID:profile.profileID error:&error], @"%@", error);
+    XCTAssertNil(error);
+
+    FTMSoundPackImporter *importer = [[FTMSoundPackImporter alloc] init];
+    NSURL *sourceWavURL = [self.tempBaseURL URLByAppendingPathComponent:@"resolver-cache.wav"];
+    XCTAssertTrue([self writeTinyPCM16WavToURL:sourceWavURL]);
+    XCTAssertTrue([store addAudioFilesAtURLs:@[sourceWavURL]
+                                    toSlotID:FTMSoundSlotTyping
+                                     profile:profile
+                                    importer:importer
+                                    warnings:nil
+                                       error:&error], @"%@", error);
+    XCTAssertNil(error);
+
+    FTMSoundResolver *resolver = [[FTMSoundResolver alloc] initWithProfileStore:store bundle:[NSBundle mainBundle]];
+    NSString *initialPath = [resolver randomSoundPathForSlotID:FTMSoundSlotTyping profile:nil];
+    XCTAssertTrue(initialPath.length > 0);
+
+    NSArray<FTMProfileAsset *> *assignedAssets = [store assignedAssetsForSlotID:FTMSoundSlotTyping profile:profile];
+    XCTAssertEqual(assignedAssets.count, (NSUInteger)1);
+    XCTAssertTrue([store deleteAssetIDsFromProfile:@[assignedAssets.firstObject.assetID] profile:profile error:&error], @"%@", error);
+    XCTAssertNil(error);
+
+    NSString *stalePath = [resolver randomSoundPathForSlotID:FTMSoundSlotTyping profile:nil];
+    XCTAssertEqualObjects(stalePath, initialPath);
+
+    [resolver invalidateCache];
+    NSString *updatedPath = [resolver randomSoundPathForSlotID:FTMSoundSlotTyping profile:nil];
+    XCTAssertNotEqualObjects(updatedPath, initialPath);
+}
+
 #pragma mark - Helpers
 
 - (NSURL *)oggFixtureURL {
