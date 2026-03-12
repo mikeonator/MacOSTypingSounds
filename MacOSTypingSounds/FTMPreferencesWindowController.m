@@ -959,7 +959,7 @@
     self.manageAppRoutingButton = [self button:@"Manage App Routing…" action:@selector(handleManageAppRouting:) frame:NSMakeRect(626, 584, 148, 28)];
     [rightPane addSubview:self.manageAppRoutingButton];
 
-    self.helpTextLabel = [self wrappingLabel:@"Tip: Global key sounds require Accessibility permission for this app (System Settings > Privacy & Security > Accessibility). Assigned apps use their profile for typing and launch/quit sounds." frame:NSMakeRect(16, 540, 760, 42)];
+    self.helpTextLabel = [self wrappingLabel:@"Tip: Global key sounds require Keyboard access (System Settings > Privacy & Security > Accessibility and Input Monitoring). Assigned apps use their profile for typing and launch/quit sounds." frame:NSMakeRect(16, 540, 760, 42)];
     [rightPane addSubview:self.helpTextLabel];
 
     [rightPane addSubview:[self label:@"Sound Slots (Assigned Assets)" frame:NSMakeRect(16, 512, 240, 18) bold:YES]];
