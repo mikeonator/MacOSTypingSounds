@@ -27,6 +27,30 @@
 
 @implementation AppDelegate
 
+- (NSArray<NSString *> *)missingKeyboardAccessComponents {
+    NSMutableArray<NSString *> *components = [NSMutableArray array];
+    if (![self hasAccessibilityAccess]) {
+        [components addObject:@"Accessibility"];
+    }
+    if (@available(macOS 10.15, *)) {
+        if (![self hasInputMonitoringAccess]) {
+            [components addObject:@"Input Monitoring"];
+        }
+    }
+    return [components copy];
+}
+
+- (NSString *)keyboardAccessMenuTitle {
+    NSArray<NSString *> *missingComponents = [self missingKeyboardAccessComponents];
+    if (missingComponents.count == 0) {
+        return @"Keyboard Access Granted";
+    }
+    if (missingComponents.count == 1) {
+        return [NSString stringWithFormat:@"Grant %@ Access…", missingComponents.firstObject];
+    }
+    return @"Grant Keyboard Access…";
+}
+
 - (void)applicationDidFinishLaunching:(NSNotification *)aNotification {
     (void)aNotification;
 
@@ -170,7 +194,7 @@
     [menu addItem:appRoutingItem];
 
     BOOL keyboardAccessGranted = [self hasKeyboardMonitoringAccess];
-    NSMenuItem *accessibilityItem = [[NSMenuItem alloc] initWithTitle:(keyboardAccessGranted ? @"Keyboard Access Granted" : @"Request Keyboard Access…")
+    NSMenuItem *accessibilityItem = [[NSMenuItem alloc] initWithTitle:[self keyboardAccessMenuTitle]
                                                               action:@selector(requestKeyboardAccess:)
                                                        keyEquivalent:@""];
     accessibilityItem.target = self;
@@ -365,10 +389,7 @@
 }
 
 - (BOOL)hasKeyboardMonitoringAccess {
-    if (@available(macOS 10.15, *)) {
-        return [self hasInputMonitoringAccess];
-    }
-    return [self hasAccessibilityAccess];
+    return ([[self missingKeyboardAccessComponents] count] == 0);
 }
 
 - (BOOL)requestAccessibilityAccessPrompting:(BOOL)shouldPrompt {
