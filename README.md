@@ -1,6 +1,6 @@
 # MacOSTypingSounds
 
-![AppIcon](Branding/MacOSTypingSoundsIcon-iOS-Dark-1024x1024@1x.png)
+<img src="Branding/MacOSTypingSoundsIcon-iOS-Dark-1024x1024@1x.png" width="256" alt="AppIcon">
 
 Mac menu bar app that plays keyboard and app event sounds with profile-based routing.
 
