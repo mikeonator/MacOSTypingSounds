@@ -1,6 +1,7 @@
 #import <Cocoa/Cocoa.h>
 #import <XCTest/XCTest.h>
 
+#import "AppDelegate.h"
 #import "FTMProfileSystem.h"
 
 @interface MacOSTypingSoundsTests : XCTestCase
@@ -47,6 +48,26 @@
     XCTAssertNotNil(active);
     XCTAssertEqualObjects([self.testDefaults stringForKey:FTMDefaultsKeyActiveProfileID], active.profileID);
 
+}
+
+- (void)testFirstLaunchSetupPromptGatingLogic {
+    XCTAssertFalse(FTMShouldPresentFirstLaunchSetupPrompt(YES, NO, NO));
+    XCTAssertTrue(FTMShouldPresentFirstLaunchSetupPrompt(NO, NO, NO));
+    XCTAssertTrue(FTMShouldPresentFirstLaunchSetupPrompt(NO, YES, NO));
+    XCTAssertFalse(FTMShouldPresentFirstLaunchSetupPrompt(NO, YES, YES));
+}
+
+- (void)testPermissionWarningVisibilityLogic {
+    XCTAssertTrue(FTMShouldShowPermissionsWarningItem(NO, NO));
+    XCTAssertTrue(FTMShouldShowPermissionsWarningItem(YES, NO));
+    XCTAssertTrue(FTMShouldShowPermissionsWarningItem(NO, YES));
+    XCTAssertFalse(FTMShouldShowPermissionsWarningItem(YES, YES));
+}
+
+- (void)testRouteLineIsShownOnlyWhenOptionModifierIsHeld {
+    XCTAssertFalse(FTMShouldShowRouteLineForModifierFlags(0));
+    XCTAssertFalse(FTMShouldShowRouteLineForModifierFlags(NSEventModifierFlagCommand | NSEventModifierFlagShift));
+    XCTAssertTrue(FTMShouldShowRouteLineForModifierFlags(NSEventModifierFlagOption));
 }
 
 - (void)testSoundResolverMapsSpecialKeys {
@@ -126,6 +147,31 @@
 
     NSNumber *sizeValue = nil;
     XCTAssertTrue([convertedURL getResourceValue:&sizeValue forKey:NSURLFileSizeKey error:nil]);
+    XCTAssertGreaterThan(sizeValue.unsignedIntegerValue, (NSUInteger)0);
+}
+
+- (void)testImporterConvertsNonVorbisOggToWav {
+    FTMSoundPackImporter *importer = [[FTMSoundPackImporter alloc] init];
+    NSURL *packURL = [self.tempBaseURL URLByAppendingPathComponent:@"NativeOggPack" isDirectory:YES];
+    NSURL *typingURL = [packURL URLByAppendingPathComponent:@"typing" isDirectory:YES];
+    NSURL *profileURL = [self.tempBaseURL URLByAppendingPathComponent:@"NativeOggProfileDest" isDirectory:YES];
+    [[NSFileManager defaultManager] createDirectoryAtURL:typingURL withIntermediateDirectories:YES attributes:nil error:nil];
+
+    NSURL *disguisedOggURL = [typingURL URLByAppendingPathComponent:@"typing_native_fallback.ogg"];
+    XCTAssertTrue([self writeTinyOpusOggToURL:disguisedOggURL]);
+
+    NSError *error = nil;
+    NSArray<NSString *> *warnings = nil;
+    XCTAssertTrue([importer importSoundPackFolderURL:packURL intoProfileDirectory:profileURL warnings:&warnings error:&error], @"%@", error);
+    XCTAssertNil(error);
+    XCTAssertEqual(warnings.count, (NSUInteger)0);
+
+    NSArray<NSURL *> *typingFiles = [importer fileURLsForSlotID:FTMSoundSlotTyping profileDirectory:profileURL];
+    XCTAssertEqual(typingFiles.count, (NSUInteger)1);
+    NSURL *storedURL = typingFiles.firstObject;
+    XCTAssertEqualObjects(storedURL.pathExtension.lowercaseString, @"wav");
+    NSNumber *sizeValue = nil;
+    XCTAssertTrue([storedURL getResourceValue:&sizeValue forKey:NSURLFileSizeKey error:nil]);
     XCTAssertGreaterThan(sizeValue.unsignedIntegerValue, (NSUInteger)0);
 }
 
@@ -219,6 +265,33 @@
     XCTAssertEqual(assets.count, (NSUInteger)2);
     XCTAssertEqual(unassigned.count, (NSUInteger)2);
     XCTAssertEqual([store assignedAssetsForSlotID:FTMSoundSlotTyping profile:profile].count, (NSUInteger)0);
+}
+
+- (void)testFlatImportConvertsNonVorbisOggToWav {
+    FTMProfileStore *store = [[FTMProfileStore alloc] initWithBaseDirectoryURL:self.tempBaseURL defaults:self.testDefaults bundle:[NSBundle mainBundle]];
+    XCTAssertTrue([store loadOrInitialize:nil]);
+
+    NSError *error = nil;
+    FTMProfile *profile = [store createEmptyProfileNamed:@"Flat OGG Fallback" error:&error];
+    XCTAssertNotNil(profile);
+    XCTAssertNil(error);
+
+    NSURL *packURL = [self.tempBaseURL URLByAppendingPathComponent:@"FlatOggPack" isDirectory:YES];
+    XCTAssertTrue([[NSFileManager defaultManager] createDirectoryAtURL:packURL withIntermediateDirectories:YES attributes:nil error:nil]);
+    NSURL *disguisedOggURL = [packURL URLByAppendingPathComponent:@"native_fallback.ogg"];
+    XCTAssertTrue([self writeTinyOpusOggToURL:disguisedOggURL]);
+
+    FTMSoundPackImporter *importer = [[FTMSoundPackImporter alloc] init];
+    NSArray<NSString *> *warnings = nil;
+    XCTAssertTrue([store importAudioFolderFlat:packURL intoProfile:profile importer:importer warnings:&warnings error:&error], @"%@", error);
+    XCTAssertNil(error);
+    XCTAssertNotNil(warnings);
+
+    NSArray<FTMProfileAsset *> *assets = [store assetsForProfile:profile];
+    XCTAssertEqual(assets.count, (NSUInteger)1);
+    FTMProfileAsset *asset = assets.firstObject;
+    XCTAssertEqualObjects(asset.sourceExtension.lowercaseString, @"ogg");
+    XCTAssertEqualObjects(asset.storedFileName.pathExtension.lowercaseString, @"wav");
 }
 
 - (void)testAppRulePersistsAndResolvesAssignedProfile {
@@ -493,7 +566,179 @@
     XCTAssertNotEqualObjects(updatedPath, initialPath);
 }
 
+- (void)testBundledDefaultPackSeedingSeedsAllThreeProfiles {
+    NSBundle *bundle = [self syntheticDefaultPackBundle];
+    XCTAssertNotNil(bundle);
+
+    FTMProfileStore *store = [[FTMProfileStore alloc] initWithBaseDirectoryURL:self.tempBaseURL defaults:self.testDefaults bundle:bundle];
+    NSError *error = nil;
+    XCTAssertTrue([store loadOrInitialize:&error], @"%@", error);
+    XCTAssertNil(error);
+
+    NSSet *profileNames = [NSSet setWithArray:[store.profiles valueForKey:@"name"]];
+    XCTAssertEqual(store.profiles.count, (NSUInteger)3);
+    XCTAssertTrue([profileNames containsObject:@"Fallout Classic"]);
+    XCTAssertTrue([profileNames containsObject:@"Cyberpunk"]);
+    XCTAssertTrue([profileNames containsObject:@"Minecraft"]);
+}
+
+- (void)testBundledDefaultPackSeedingIsMissingOnly {
+    NSBundle *bundle = [self syntheticDefaultPackBundle];
+    XCTAssertNotNil(bundle);
+
+    FTMProfileStore *store = [[FTMProfileStore alloc] initWithBaseDirectoryURL:self.tempBaseURL defaults:self.testDefaults bundle:bundle];
+    NSError *error = nil;
+    XCTAssertTrue([store loadOrInitialize:&error], @"%@", error);
+    XCTAssertNil(error);
+
+    FTMProfile *fallout = [self profileNamed:@"Fallout Classic" inStore:store];
+    FTMProfile *cyberpunk = [self profileNamed:@"Cyberpunk" inStore:store];
+    FTMProfile *minecraft = [self profileNamed:@"Minecraft" inStore:store];
+    XCTAssertNotNil(fallout);
+    XCTAssertNotNil(cyberpunk);
+    XCTAssertNotNil(minecraft);
+
+    NSString *falloutID = fallout.profileID;
+    NSString *cyberpunkID = cyberpunk.profileID;
+
+    XCTAssertTrue([store deleteProfile:minecraft error:&error], @"%@", error);
+    XCTAssertNil(error);
+
+    FTMProfileStore *reloaded = [[FTMProfileStore alloc] initWithBaseDirectoryURL:self.tempBaseURL defaults:self.testDefaults bundle:bundle];
+    XCTAssertTrue([reloaded loadOrInitialize:&error], @"%@", error);
+    XCTAssertNil(error);
+
+    XCTAssertEqual(reloaded.profiles.count, (NSUInteger)3);
+    XCTAssertEqualObjects([self profileNamed:@"Fallout Classic" inStore:reloaded].profileID, falloutID);
+    XCTAssertEqualObjects([self profileNamed:@"Cyberpunk" inStore:reloaded].profileID, cyberpunkID);
+    XCTAssertNotNil([self profileNamed:@"Minecraft" inStore:reloaded]);
+}
+
+- (void)testBundledDefaultPackSeedingPreservesMappedAndUnmappedAssets {
+    NSBundle *bundle = [self syntheticDefaultPackBundle];
+    XCTAssertNotNil(bundle);
+
+    FTMProfileStore *store = [[FTMProfileStore alloc] initWithBaseDirectoryURL:self.tempBaseURL defaults:self.testDefaults bundle:bundle];
+    NSError *error = nil;
+    XCTAssertTrue([store loadOrInitialize:&error], @"%@", error);
+    XCTAssertNil(error);
+
+    FTMProfile *cyberpunk = [self profileNamed:@"Cyberpunk" inStore:store];
+    XCTAssertNotNil(cyberpunk);
+
+    NSArray<FTMProfileAsset *> *assets = [store assetsForProfile:cyberpunk];
+    NSArray<FTMProfileAsset *> *assigned = [store assignedAssetsForSlotID:FTMSoundSlotTyping profile:cyberpunk];
+    NSArray<FTMProfileAsset *> *unassigned = [store unassignedAssetsForProfile:cyberpunk];
+
+    XCTAssertEqual(assets.count, (NSUInteger)2);
+    XCTAssertEqual(assigned.count, (NSUInteger)1);
+    XCTAssertEqual(unassigned.count, (NSUInteger)1);
+
+    NSURL *profileDirectory = [store profileDirectoryURLForProfile:cyberpunk];
+    for (FTMProfileAsset *asset in assets) {
+        NSURL *assetURL = [[profileDirectory URLByAppendingPathComponent:@"Assets" isDirectory:YES] URLByAppendingPathComponent:asset.storedFileName];
+        XCTAssertTrue([[NSFileManager defaultManager] fileExistsAtPath:assetURL.path]);
+    }
+}
+
 #pragma mark - Helpers
+
+- (nullable FTMProfile *)profileNamed:(NSString *)name inStore:(FTMProfileStore *)store {
+    for (FTMProfile *profile in store.profiles) {
+        if ([profile.name isEqualToString:name]) {
+            return profile;
+        }
+    }
+    return nil;
+}
+
+- (NSBundle *)syntheticDefaultPackBundle {
+    NSURL *bundleURL = [self.tempBaseURL URLByAppendingPathComponent:@"SyntheticDefaults.bundle" isDirectory:YES];
+    NSURL *contentsURL = [bundleURL URLByAppendingPathComponent:@"Contents" isDirectory:YES];
+    NSURL *resourcesURL = [contentsURL URLByAppendingPathComponent:@"Resources" isDirectory:YES];
+    XCTAssertTrue([[NSFileManager defaultManager] createDirectoryAtURL:resourcesURL withIntermediateDirectories:YES attributes:nil error:nil]);
+
+    NSDictionary *info = @{
+        @"CFBundleIdentifier": @"com.macostypingsounds.tests.syntheticdefaults",
+        @"CFBundleName": @"SyntheticDefaults",
+        @"CFBundlePackageType": @"BNDL",
+        @"CFBundleVersion": @"1",
+        @"CFBundleShortVersionString": @"1.0",
+    };
+    NSURL *infoURL = [contentsURL URLByAppendingPathComponent:@"Info.plist"];
+    XCTAssertTrue([info writeToURL:infoURL atomically:YES]);
+
+    NSArray<NSDictionary *> *packs = @[
+        @{
+            @"directory": @"FalloutClassic",
+            @"displayName": @"Fallout Classic",
+            @"assets": @[@"typing.wav", @"launch.wav"],
+            @"typing": @[@"typing.wav"],
+            @"launch": @[@"launch.wav"],
+        },
+        @{
+            @"directory": @"Cyberpunk",
+            @"displayName": @"Cyberpunk",
+            @"assets": @[@"typing.wav", @"spare.wav"],
+            @"typing": @[@"typing.wav"],
+            @"launch": @[],
+        },
+        @{
+            @"directory": @"Minecraft",
+            @"displayName": @"Minecraft",
+            @"assets": @[@"typing.wav", @"quit.wav"],
+            @"typing": @[@"typing.wav"],
+            @"quit": @[@"quit.wav"],
+        },
+    ];
+
+    for (NSDictionary *pack in packs) {
+        NSString *directory = pack[@"directory"];
+        NSString *displayName = pack[@"displayName"];
+        NSArray<NSString *> *assets = pack[@"assets"];
+        NSArray<NSString *> *typing = pack[@"typing"] ?: @[];
+        NSArray<NSString *> *launch = pack[@"launch"] ?: @[];
+        NSArray<NSString *> *quit = pack[@"quit"] ?: @[];
+
+        NSURL *packRoot = [resourcesURL URLByAppendingPathComponent:[@"DefaultPacks" stringByAppendingPathComponent:directory] isDirectory:YES];
+        NSURL *assetsURL = [packRoot URLByAppendingPathComponent:@"Assets" isDirectory:YES];
+        XCTAssertTrue([[NSFileManager defaultManager] createDirectoryAtURL:assetsURL withIntermediateDirectories:YES attributes:nil error:nil]);
+
+        NSMutableArray<NSDictionary *> *manifestAssets = [NSMutableArray arrayWithCapacity:assets.count];
+        for (NSString *assetName in assets) {
+            NSURL *assetURL = [assetsURL URLByAppendingPathComponent:assetName];
+            XCTAssertTrue([self writeTinyPCM16WavToURL:assetURL]);
+            [manifestAssets addObject:@{
+                @"fileName": assetName,
+                @"displayName": assetName,
+                @"sourceExtension": @"wav",
+            }];
+        }
+
+        NSDictionary *slotAssignments = @{
+            FTMSoundSlotTyping: typing,
+            FTMSoundSlotEnter: @[],
+            FTMSoundSlotBackspace: @[],
+            FTMSoundSlotTab: @[],
+            FTMSoundSlotSpace: @[],
+            FTMSoundSlotEscape: @[],
+            FTMSoundSlotLaunch: launch,
+            FTMSoundSlotQuit: quit,
+        };
+
+        NSDictionary *manifest = @{
+            @"schemaVersion": @1,
+            @"displayName": displayName,
+            @"assets": manifestAssets,
+            @"slotAssignments": slotAssignments,
+        };
+        NSURL *manifestURL = [packRoot URLByAppendingPathComponent:@"pack-manifest.plist"];
+        XCTAssertTrue([manifest writeToURL:manifestURL atomically:YES]);
+    }
+
+    NSBundle *bundle = [NSBundle bundleWithPath:bundleURL.path];
+    return bundle;
+}
 
 - (NSURL *)oggFixtureURL {
     NSBundle *bundle = [NSBundle bundleForClass:[self class]];
@@ -531,6 +776,16 @@
     [self appendLE32:(uint32_t)dataSize toData:data];
     [data appendBytes:samples length:(NSUInteger)dataSize];
 
+    return [data writeToURL:url atomically:YES];
+}
+
+- (BOOL)writeTinyOpusOggToURL:(NSURL *)url {
+    static NSString *const kTinyOpusOggBase64 =
+    @"T2dnUwACAAAAAAAAAABbdoYnAAAAAJxa1eEBE09wdXNIZWFkAQE4AYA+AAAAAABPZ2dTAAAAAAAAAAAAAFt2hicBAAAAl92GyQE9T3B1c1RhZ3MMAAAATGF2ZjYyLjMuMTAwAQAAAB0AAABlbmNvZGVyPUxhdmM2Mi4xMS4xMDAgbGlib3B1c09nZ1MABPgTAAAAAAAAW3aGJwIAAAB1xQf2Bjw8PDw8PEsBgi3aGfCgP+MaBqJIHyfe3WYO+oqVd3bQ772gHdmPuPxv8RqP8XsfYCc/BoadVDHfw0kzhlrX89W9gEtBCZzWAKQpbQFDRgQHC1rHh0nVxMw2sHKcXBtvwd+HQA2lOtk96b3Pmw8Rl4Faa/EVgAAAAAAAAAAAAEtBA5i5HooHdzt0QwqUvmaq/lEv1zMyUOl7QFQNfG3V/VUvs2YuqjhxClxybwGNPxG8OPvEjQwz8AAAAEtBBJjG/okJ/wtmI0zqHATcnnIb1SLAyazJNCt3oegq9u4W2niZ7SIeMWlhUXaG5U5e9piGobkxAAAAAEtBAJi5HokJ/wtmI2Ye62g4tlbImqlRbnhuhyG2kt0erKy71TeNJQ81ogsOUuwrpu03Cmk8VbdhpxQzfUtBBQR775CkHJkiAMeO6g15lJ+GRZpFd/n4O8WBl14cilZJWs/jW2czawnD0ghMaODohuZOtrAAAAAAAA==";
+    NSData *data = [[NSData alloc] initWithBase64EncodedString:kTinyOpusOggBase64 options:0];
+    if (data.length == 0) {
+        return NO;
+    }
     return [data writeToURL:url atomically:YES];
 }
 

@@ -3,7 +3,7 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 46;
+	objectVersion = 77;
 	objects = {
 
 /* Begin PBXBuildFile section */
@@ -13,16 +13,11 @@
 		D1A000021AA24337006CEAF2 /* FTMPreferencesWindowController.m in Sources */ = {isa = PBXBuildFile; fileRef = D1A000131AA24337006CEAF2 /* FTMPreferencesWindowController.m */; };
 		C3B5AA061AA24337006CEAF2 /* Images.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = C3B5AA051AA24337006CEAF2 /* Images.xcassets */; };
 		C3B5AA091AA24337006CEAF2 /* MainMenu.xib in Resources */ = {isa = PBXBuildFile; fileRef = C3B5AA071AA24337006CEAF2 /* MainMenu.xib */; };
+		F0A000001AA24337006CEAF2 /* DefaultPacks in Resources */ = {isa = PBXBuildFile; fileRef = F0A000011AA24337006CEAF2 /* DefaultPacks */; };
+		F0A000021AA24337006CEAF2 /* MenuBarIconTemplate.png in Resources */ = {isa = PBXBuildFile; fileRef = F0A000031AA24337006CEAF2 /* MenuBarIconTemplate.png */; };
 			C3B5AA151AA24337006CEAF2 /* MacOSTypingSoundsTests.m in Sources */ = {isa = PBXBuildFile; fileRef = C3B5AA141AA24337006CEAF2 /* MacOSTypingSoundsTests.m */; };
 			D1A000031AA24337006CEAF2 /* FTMProfileSystem.m in Sources */ = {isa = PBXBuildFile; fileRef = D1A000111AA24337006CEAF2 /* FTMProfileSystem.m */; };
 			D1A100001AA24337006CEAF2 /* typing_sample.ogg in Resources */ = {isa = PBXBuildFile; fileRef = D1A100011AA24337006CEAF2 /* typing_sample.ogg */; };
-			C3B5AA221AA24370006CEAF2 /* k2.mp3 in Resources */ = {isa = PBXBuildFile; fileRef = C3B5AA1F1AA24370006CEAF2 /* k2.mp3 */; };
-		C3B5AA231AA24370006CEAF2 /* k3.mp3 in Resources */ = {isa = PBXBuildFile; fileRef = C3B5AA201AA24370006CEAF2 /* k3.mp3 */; };
-		C3B5AA241AA24370006CEAF2 /* k4.mp3 in Resources */ = {isa = PBXBuildFile; fileRef = C3B5AA211AA24370006CEAF2 /* k4.mp3 */; };
-		C3B5AA261AA24BAC006CEAF2 /* kenter.mp3 in Resources */ = {isa = PBXBuildFile; fileRef = C3B5AA251AA24BAC006CEAF2 /* kenter.mp3 */; };
-		C3B5AA291AA24F43006CEAF2 /* poweroff.mp3 in Resources */ = {isa = PBXBuildFile; fileRef = C3B5AA271AA24F43006CEAF2 /* poweroff.mp3 */; };
-		C3B5AA2A1AA24F43006CEAF2 /* poweron.mp3 in Resources */ = {isa = PBXBuildFile; fileRef = C3B5AA281AA24F43006CEAF2 /* poweron.mp3 */; };
-		C3B5AA351AA25DB2006CEAF2 /* pipboy_icon.png in Resources */ = {isa = PBXBuildFile; fileRef = C3B5AA341AA25DB2006CEAF2 /* pipboy_icon.png */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -46,18 +41,13 @@
 		D1A000121AA24337006CEAF2 /* FTMPreferencesWindowController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = FTMPreferencesWindowController.h; sourceTree = "<group>"; };
 		D1A000131AA24337006CEAF2 /* FTMPreferencesWindowController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = FTMPreferencesWindowController.m; sourceTree = "<group>"; };
 		C3B5AA051AA24337006CEAF2 /* Images.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Images.xcassets; sourceTree = "<group>"; };
+		F0A000011AA24337006CEAF2 /* DefaultPacks */ = {isa = PBXFileReference; lastKnownFileType = folder; path = DefaultPacks; sourceTree = "<group>"; };
+		F0A000031AA24337006CEAF2 /* MenuBarIconTemplate.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = MenuBarIconTemplate.png; sourceTree = "<group>"; };
 		C3B5AA081AA24337006CEAF2 /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.xib; name = Base; path = Base.lproj/MainMenu.xib; sourceTree = "<group>"; };
 		C3B5AA0E1AA24337006CEAF2 /* MacOSTypingSoundsTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MacOSTypingSoundsTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		C3B5AA131AA24337006CEAF2 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 			C3B5AA141AA24337006CEAF2 /* MacOSTypingSoundsTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = MacOSTypingSoundsTests.m; sourceTree = "<group>"; };
 			D1A100011AA24337006CEAF2 /* typing_sample.ogg */ = {isa = PBXFileReference; lastKnownFileType = file; path = Fixtures/Ogg/typing_sample.ogg; sourceTree = "<group>"; };
-			C3B5AA1F1AA24370006CEAF2 /* k2.mp3 */ = {isa = PBXFileReference; lastKnownFileType = audio.mp3; path = k2.mp3; sourceTree = "<group>"; };
-		C3B5AA201AA24370006CEAF2 /* k3.mp3 */ = {isa = PBXFileReference; lastKnownFileType = audio.mp3; path = k3.mp3; sourceTree = "<group>"; };
-		C3B5AA211AA24370006CEAF2 /* k4.mp3 */ = {isa = PBXFileReference; lastKnownFileType = audio.mp3; path = k4.mp3; sourceTree = "<group>"; };
-		C3B5AA251AA24BAC006CEAF2 /* kenter.mp3 */ = {isa = PBXFileReference; lastKnownFileType = audio.mp3; path = kenter.mp3; sourceTree = "<group>"; };
-		C3B5AA271AA24F43006CEAF2 /* poweroff.mp3 */ = {isa = PBXFileReference; lastKnownFileType = audio.mp3; path = poweroff.mp3; sourceTree = "<group>"; };
-		C3B5AA281AA24F43006CEAF2 /* poweron.mp3 */ = {isa = PBXFileReference; lastKnownFileType = audio.mp3; path = poweron.mp3; sourceTree = "<group>"; };
-		C3B5AA341AA25DB2006CEAF2 /* pipboy_icon.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = pipboy_icon.png; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -99,8 +89,6 @@
 		C3B5A9FD1AA24337006CEAF2 /* MacOSTypingSounds */ = {
 			isa = PBXGroup;
 			children = (
-				C3B5AA2D1AA25965006CEAF2 /* Icons */,
-				C3B5AA1E1AA24363006CEAF2 /* Sounds */,
 				C3B5AA001AA24337006CEAF2 /* AppDelegate.h */,
 				C3B5AA011AA24337006CEAF2 /* AppDelegate.m */,
 				D1A000101AA24337006CEAF2 /* FTMProfileSystem.h */,
@@ -108,6 +96,8 @@
 				D1A000121AA24337006CEAF2 /* FTMPreferencesWindowController.h */,
 				D1A000131AA24337006CEAF2 /* FTMPreferencesWindowController.m */,
 				C3B5AA051AA24337006CEAF2 /* Images.xcassets */,
+				F0A000011AA24337006CEAF2 /* DefaultPacks */,
+				F0A000031AA24337006CEAF2 /* MenuBarIconTemplate.png */,
 				C3B5AA071AA24337006CEAF2 /* MainMenu.xib */,
 				C3B5A9FE1AA24337006CEAF2 /* Supporting Files */,
 			);
@@ -139,27 +129,6 @@
 				C3B5AA131AA24337006CEAF2 /* Info.plist */,
 			);
 			name = "Supporting Files";
-			sourceTree = "<group>";
-		};
-		C3B5AA1E1AA24363006CEAF2 /* Sounds */ = {
-			isa = PBXGroup;
-			children = (
-				C3B5AA271AA24F43006CEAF2 /* poweroff.mp3 */,
-				C3B5AA281AA24F43006CEAF2 /* poweron.mp3 */,
-				C3B5AA251AA24BAC006CEAF2 /* kenter.mp3 */,
-				C3B5AA1F1AA24370006CEAF2 /* k2.mp3 */,
-				C3B5AA201AA24370006CEAF2 /* k3.mp3 */,
-				C3B5AA211AA24370006CEAF2 /* k4.mp3 */,
-			);
-			name = Sounds;
-			sourceTree = "<group>";
-		};
-		C3B5AA2D1AA25965006CEAF2 /* Icons */ = {
-			isa = PBXGroup;
-			children = (
-				C3B5AA341AA25DB2006CEAF2 /* pipboy_icon.png */,
-			);
-			name = Icons;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -203,33 +172,36 @@
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
-		C3B5A9F31AA24337006CEAF2 /* Project object */ = {
-			isa = PBXProject;
-			attributes = {
-				LastUpgradeCheck = 0610;
-				ORGANIZATIONNAME = mdt;
-				TargetAttributes = {
-					C3B5A9FA1AA24337006CEAF2 = {
-						CreatedOnToolsVersion = 6.1.1;
-					};
-					C3B5AA0D1AA24337006CEAF2 = {
-						CreatedOnToolsVersion = 6.1.1;
-						TestTargetID = C3B5A9FA1AA24337006CEAF2;
+			C3B5A9F31AA24337006CEAF2 /* Project object */ = {
+				isa = PBXProject;
+				attributes = {
+					BuildIndependentTargetsInParallel = 1;
+					LastSwiftUpdateCheck = 1700;
+					LastUpgradeCheck = 1700;
+					ORGANIZATIONNAME = MacOSTypingSounds;
+					TargetAttributes = {
+						C3B5A9FA1AA24337006CEAF2 = {
+							CreatedOnToolsVersion = 17.0;
+						};
+						C3B5AA0D1AA24337006CEAF2 = {
+							CreatedOnToolsVersion = 17.0;
+							TestTargetID = C3B5A9FA1AA24337006CEAF2;
+						};
 					};
 				};
-			};
-			buildConfigurationList = C3B5A9F61AA24337006CEAF2 /* Build configuration list for PBXProject "MacOSTypingSounds" */;
-			compatibilityVersion = "Xcode 3.2";
-			developmentRegion = English;
-			hasScannedForEncodings = 0;
-			knownRegions = (
-				en,
-				Base,
-			);
-			mainGroup = C3B5A9F21AA24337006CEAF2;
-			productRefGroup = C3B5A9FC1AA24337006CEAF2 /* Products */;
-			projectDirPath = "";
-			projectRoot = "";
+				buildConfigurationList = C3B5A9F61AA24337006CEAF2 /* Build configuration list for PBXProject "MacOSTypingSounds" */;
+				developmentRegion = English;
+				hasScannedForEncodings = 0;
+				knownRegions = (
+					en,
+					Base,
+				);
+				mainGroup = C3B5A9F21AA24337006CEAF2;
+				minimizedProjectReferenceProxies = 1;
+				preferredProjectObjectVersion = 77;
+				productRefGroup = C3B5A9FC1AA24337006CEAF2 /* Products */;
+				projectDirPath = "";
+				projectRoot = "";
 			targets = (
 				C3B5A9FA1AA24337006CEAF2 /* MacOSTypingSounds */,
 				C3B5AA0D1AA24337006CEAF2 /* MacOSTypingSoundsTests */,
@@ -242,14 +214,9 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				C3B5AA241AA24370006CEAF2 /* k4.mp3 in Resources */,
-				C3B5AA351AA25DB2006CEAF2 /* pipboy_icon.png in Resources */,
-				C3B5AA261AA24BAC006CEAF2 /* kenter.mp3 in Resources */,
 				C3B5AA061AA24337006CEAF2 /* Images.xcassets in Resources */,
-				C3B5AA2A1AA24F43006CEAF2 /* poweron.mp3 in Resources */,
-				C3B5AA221AA24370006CEAF2 /* k2.mp3 in Resources */,
-				C3B5AA291AA24F43006CEAF2 /* poweroff.mp3 in Resources */,
-				C3B5AA231AA24370006CEAF2 /* k3.mp3 in Resources */,
+				F0A000001AA24337006CEAF2 /* DefaultPacks in Resources */,
+				F0A000021AA24337006CEAF2 /* MenuBarIconTemplate.png in Resources */,
 				C3B5AA091AA24337006CEAF2 /* MainMenu.xib in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

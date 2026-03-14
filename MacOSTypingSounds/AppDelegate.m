@@ -3,7 +3,6 @@
 //  MacOSTypingSounds
 //
 //  Created by Hugo Gonzalez on 2/28/15.
-//  Copyright (c) 2015 mdt. All rights reserved.
 //
 
 #import "AppDelegate.h"
@@ -13,8 +12,9 @@
 #import "FTMPreferencesWindowController.h"
 #import "FTMProfileSystem.h"
 
-@interface AppDelegate ()
-@property (strong, nonatomic) IBOutlet NSMenu *statusMenu;
+static NSString * const FTMDefaultsKeyDidShowPermissionsSetupPrompt = @"didShowPermissionsSetupPrompt";
+
+@interface AppDelegate () <NSMenuDelegate, FTMPreferencesPermissionProviding>
 @property (strong, nonatomic) NSStatusItem *statusItem;
 @property (assign, nonatomic) BOOL isMuted;
 @property (strong, nonatomic) id globalKeyMonitor;
@@ -27,36 +27,15 @@
 
 @implementation AppDelegate
 
-- (NSArray<NSString *> *)missingKeyboardAccessComponents {
-    NSMutableArray<NSString *> *components = [NSMutableArray array];
-    if (![self hasAccessibilityAccess]) {
-        [components addObject:@"Accessibility"];
-    }
-    if (@available(macOS 10.15, *)) {
-        if (![self hasInputMonitoringAccess]) {
-            [components addObject:@"Input Monitoring"];
-        }
-    }
-    return [components copy];
-}
+#pragma mark - App Lifecycle
 
-- (NSString *)keyboardAccessMenuTitle {
-    NSArray<NSString *> *missingComponents = [self missingKeyboardAccessComponents];
-    if (missingComponents.count == 0) {
-        return @"Keyboard Access Granted";
-    }
-    if (missingComponents.count == 1) {
-        return [NSString stringWithFormat:@"Grant %@ Access…", missingComponents.firstObject];
-    }
-    return @"Grant Keyboard Access…";
-}
-
-- (void)applicationDidFinishLaunching:(NSNotification *)aNotification {
-    (void)aNotification;
+- (void)applicationDidFinishLaunching:(NSNotification *)notification {
+    (void)notification;
 
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
     [defaults registerDefaults:@{
         FTMDefaultsKeyMuted: @NO,
+        FTMDefaultsKeyDidShowPermissionsSetupPrompt: @NO,
     }];
 
     self.isMuted = [defaults boolForKey:FTMDefaultsKeyMuted];
@@ -74,11 +53,12 @@
     [self refreshGlobalKeyMonitor];
     [self installWorkspaceObservers];
     [self setupStatusItem];
-    [self setMenuItems];
+    [self setMenuItemsShowingRouteLine:NO];
+    [self maybePresentFirstLaunchSetupPrompt];
 }
 
-- (void)applicationWillTerminate:(NSNotification *)aNotification {
-    (void)aNotification;
+- (void)applicationWillTerminate:(NSNotification *)notification {
+    (void)notification;
     if (self.globalKeyMonitor) {
         [NSEvent removeMonitor:self.globalKeyMonitor];
         self.globalKeyMonitor = nil;
@@ -87,19 +67,6 @@
 }
 
 #pragma mark - Setup
-
-- (void)refreshGlobalKeyMonitor {
-    if (self.globalKeyMonitor) {
-        [NSEvent removeMonitor:self.globalKeyMonitor];
-        self.globalKeyMonitor = nil;
-    }
-    __weak typeof(self) weakSelf = self;
-    self.globalKeyMonitor = [NSEvent addGlobalMonitorForEventsMatchingMask:NSEventMaskKeyDown handler:^(NSEvent *event) {
-        __strong typeof(weakSelf) self = weakSelf;
-        if (!self) { return; }
-        [self handleGlobalKeyDown:event];
-    }];
-}
 
 - (void)installWorkspaceObservers {
     NSNotificationCenter *workspaceCenter = [[NSWorkspace sharedWorkspace] notificationCenter];
@@ -118,10 +85,46 @@
 }
 
 - (void)setupStatusItem {
-    self.statusItem = [[NSStatusBar systemStatusBar] statusItemWithLength:28];
+    self.statusItem = [[NSStatusBar systemStatusBar] statusItemWithLength:NSSquareStatusItemLength];
     if (self.statusItem.button) {
-        self.statusItem.button.image = [NSImage imageNamed:@"pipboy_icon"];
+        NSString *menuIconPNGPath = [[NSBundle mainBundle] pathForResource:@"MenuBarIconTemplate" ofType:@"png"];
+        NSImage *menuIcon = menuIconPNGPath.length ? [[NSImage alloc] initWithContentsOfFile:menuIconPNGPath] : nil;
+        if (!menuIcon) {
+            menuIcon = [NSImage imageNamed:@"MenuBarIconTemplate"];
+        }
+        if (!menuIcon) {
+            menuIcon = [NSImage imageNamed:@"MenuBarIconTemplate.pdf"];
+        }
+        if (menuIcon) {
+            menuIcon = [menuIcon copy];
+            menuIcon.template = YES;
+            menuIcon.size = NSMakeSize(24, 24);
+            self.statusItem.button.image = menuIcon;
+            self.statusItem.button.imageScaling = NSImageScaleProportionallyDown;
+            self.statusItem.button.imagePosition = NSImageOnly;
+        }
     }
+
+    NSMenu *menu = [[NSMenu alloc] initWithTitle:@"MacOSTypingSounds"];
+    menu.delegate = self;
+    self.statusItem.menu = menu;
+}
+
+- (void)refreshGlobalKeyMonitor {
+    if (self.globalKeyMonitor) {
+        [NSEvent removeMonitor:self.globalKeyMonitor];
+        self.globalKeyMonitor = nil;
+    }
+
+    __weak typeof(self) weakSelf = self;
+    self.globalKeyMonitor = [NSEvent addGlobalMonitorForEventsMatchingMask:NSEventMaskKeyDown
+                                                                    handler:^(NSEvent *event) {
+        __strong typeof(weakSelf) self = weakSelf;
+        if (!self) {
+            return;
+        }
+        [self handleGlobalKeyDown:event];
+    }];
 }
 
 #pragma mark - Event Handling
@@ -141,8 +144,8 @@
 - (BOOL)handleShortcutIfNeeded:(NSEvent *)event {
     NSEventModifierFlags flags = (event.modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask);
     BOOL hasShortcutModifiers = ((flags & NSEventModifierFlagCommand) &&
-                                (flags & NSEventModifierFlagShift) &&
-                                (flags & NSEventModifierFlagControl));
+                                 (flags & NSEventModifierFlagShift) &&
+                                 (flags & NSEventModifierFlagControl));
     if (!hasShortcutModifiers) {
         return NO;
     }
@@ -160,8 +163,39 @@
 
 #pragma mark - Status Menu
 
-- (void)setMenuItems {
-    NSMenu *menu = [[NSMenu alloc] init];
+- (NSArray<NSString *> *)missingKeyboardAccessComponents {
+    NSMutableArray<NSString *> *components = [NSMutableArray array];
+    if (![self hasAccessibilityAccess]) {
+        [components addObject:@"Accessibility"];
+    }
+    if (@available(macOS 10.15, *)) {
+        if (![self hasInputMonitoringAccess]) {
+            [components addObject:@"Input Monitoring"];
+        }
+    }
+    return [components copy];
+}
+
+- (NSString *)permissionSetupWarningTitle {
+    NSArray<NSString *> *missing = [self missingKeyboardAccessComponents];
+    if (missing.count == 0) {
+        return @"";
+    }
+    if (missing.count == 1) {
+        return [NSString stringWithFormat:@"Setup Required: Grant %@…", missing.firstObject];
+    }
+    return @"Setup Required: Grant Accessibility + Input Monitoring…";
+}
+
+- (void)setMenuItemsShowingRouteLine:(BOOL)showRouteLine {
+    NSMenu *menu = self.statusItem.menu;
+    if (!menu) {
+        menu = [[NSMenu alloc] initWithTitle:@"MacOSTypingSounds"];
+        menu.delegate = self;
+        self.statusItem.menu = menu;
+    }
+
+    [menu removeAllItems];
 
     NSMenuItem *muteItem = [[NSMenuItem alloc] initWithTitle:(self.isMuted ? @"Unmute SFX" : @"Mute SFX")
                                                       action:@selector(toggleMute)
@@ -179,27 +213,29 @@
     [menu addItem:playModeItem];
 
     [menu addItem:[NSMenuItem separatorItem]];
-    NSString *routeTitle = [self currentRouteStatusTitle];
-    if (routeTitle.length > 0) {
-        NSMenuItem *routeItem = [[NSMenuItem alloc] initWithTitle:routeTitle action:nil keyEquivalent:@""];
-        routeItem.enabled = NO;
-        [menu addItem:routeItem];
+
+    BOOL hasPermissions = [self hasKeyboardMonitoringAccess];
+    if (FTMShouldShowPermissionsWarningItem([self hasAccessibilityAccess], [self hasInputMonitoringAccess])) {
+        NSMenuItem *warningItem = [[NSMenuItem alloc] initWithTitle:[self permissionSetupWarningTitle]
+                                                             action:@selector(openPermissionSetupFromMenu:)
+                                                      keyEquivalent:@""];
+        warningItem.target = self;
+        warningItem.enabled = !hasPermissions;
+        [menu addItem:warningItem];
+        [menu addItem:[NSMenuItem separatorItem]];
     }
+
+    if (showRouteLine) {
+        NSString *routeTitle = [self currentRouteStatusTitle];
+        if (routeTitle.length > 0) {
+            NSMenuItem *routeItem = [[NSMenuItem alloc] initWithTitle:routeTitle action:nil keyEquivalent:@""];
+            routeItem.enabled = NO;
+            [menu addItem:routeItem];
+            [menu addItem:[NSMenuItem separatorItem]];
+        }
+    }
+
     [menu addItem:[self profilesMenuItem]];
-
-    NSMenuItem *appRoutingItem = [[NSMenuItem alloc] initWithTitle:@"App Routing…"
-                                                            action:@selector(showAppRoutingWindow:)
-                                                     keyEquivalent:@""];
-    appRoutingItem.target = self;
-    [menu addItem:appRoutingItem];
-
-    BOOL keyboardAccessGranted = [self hasKeyboardMonitoringAccess];
-    NSMenuItem *accessibilityItem = [[NSMenuItem alloc] initWithTitle:[self keyboardAccessMenuTitle]
-                                                              action:@selector(requestKeyboardAccess:)
-                                                       keyEquivalent:@""];
-    accessibilityItem.target = self;
-    accessibilityItem.enabled = !keyboardAccessGranted;
-    [menu addItem:accessibilityItem];
 
     NSMenuItem *preferencesItem = [[NSMenuItem alloc] initWithTitle:@"Preferences…"
                                                              action:@selector(showPreferencesWindow:)
@@ -209,7 +245,6 @@
 
     [menu addItem:[NSMenuItem separatorItem]];
     [menu addItemWithTitle:@"Quit MacOSTypingSounds" action:@selector(terminate:) keyEquivalent:@"q"];
-    self.statusItem.menu = menu;
 }
 
 - (NSMenuItem *)profilesMenuItem {
@@ -217,7 +252,9 @@
     FTMProfile *activeProfile = [self.profileStore activeProfile];
 
     for (FTMProfile *profile in self.profileStore.profiles) {
-        NSMenuItem *profileItem = [[NSMenuItem alloc] initWithTitle:profile.name action:@selector(selectProfileFromMenuItem:) keyEquivalent:@""];
+        NSMenuItem *profileItem = [[NSMenuItem alloc] initWithTitle:profile.name
+                                                             action:@selector(selectProfileFromMenuItem:)
+                                                      keyEquivalent:@""];
         profileItem.target = self;
         profileItem.representedObject = profile.profileID;
         if ([profile.profileID isEqualToString:activeProfile.profileID]) {
@@ -232,7 +269,9 @@
         [profilesSubmenu addItem:empty];
     }
 
-    NSMenuItem *profilesRoot = [[NSMenuItem alloc] initWithTitle:@"Default Profile (Unassigned Apps)" action:nil keyEquivalent:@""];
+    NSMenuItem *profilesRoot = [[NSMenuItem alloc] initWithTitle:@"Default Profile (Unassigned Apps)"
+                                                          action:nil
+                                                   keyEquivalent:@""];
     profilesRoot.submenu = profilesSubmenu;
     return profilesRoot;
 }
@@ -250,8 +289,19 @@
     }
 
     [self.soundResolver invalidateCache];
-    [self setMenuItems];
+    [self setMenuItemsShowingRouteLine:NO];
     [self.preferencesWindowController reloadAllUI];
+}
+
+- (void)menuWillOpen:(NSMenu *)menu {
+    (void)menu;
+    NSEventModifierFlags flags = [NSEvent modifierFlags] & NSEventModifierFlagDeviceIndependentFlagsMask;
+    [self setMenuItemsShowingRouteLine:FTMShouldShowRouteLineForModifierFlags(flags)];
+}
+
+- (void)menuDidClose:(NSMenu *)menu {
+    (void)menu;
+    [self setMenuItemsShowingRouteLine:NO];
 }
 
 #pragma mark - Menu Actions
@@ -259,7 +309,7 @@
 - (void)toggleMute {
     self.isMuted = !self.isMuted;
     [[NSUserDefaults standardUserDefaults] setBool:self.isMuted forKey:FTMDefaultsKeyMuted];
-    [self setMenuItems];
+    [self setMenuItemsShowingRouteLine:NO];
     [self.preferencesWindowController reloadAllUI];
 }
 
@@ -268,58 +318,80 @@
     BOOL assignedAppsOnly = FTMReadAssignedAppsOnlyFromDefaults(defaults);
     FTMWriteAssignedAppsOnlyToDefaults(defaults, !assignedAppsOnly);
     [self.soundResolver invalidateCache];
-    [self setMenuItems];
+    [self setMenuItemsShowingRouteLine:NO];
     [self.preferencesWindowController reloadAllUI];
+}
+
+- (void)ensurePreferencesWindowController {
+    if (self.preferencesWindowController) {
+        return;
+    }
+
+    self.preferencesWindowController = [[FTMPreferencesWindowController alloc] initWithProfileStore:self.profileStore
+                                                                                             importer:self.soundPackImporter
+                                                                                         soundResolver:self.soundResolver
+                                                                                           soundPlayer:self.soundPlayer
+                                                                                    permissionProvider:self];
+
+    __weak typeof(self) weakSelf = self;
+    self.preferencesWindowController.onProfilesChanged = ^{
+        __strong typeof(weakSelf) self = weakSelf;
+        if (!self) {
+            return;
+        }
+        [self.soundResolver invalidateCache];
+        [self setMenuItemsShowingRouteLine:NO];
+    };
+
+    self.preferencesWindowController.onSettingsChanged = ^{
+        __strong typeof(weakSelf) self = weakSelf;
+        if (!self) {
+            return;
+        }
+        self.isMuted = [[NSUserDefaults standardUserDefaults] boolForKey:FTMDefaultsKeyMuted];
+        [self refreshGlobalKeyMonitor];
+        [self setMenuItemsShowingRouteLine:NO];
+    };
 }
 
 - (void)showPreferencesWindow:(id)sender {
     (void)sender;
-    if (!self.preferencesWindowController) {
-        self.preferencesWindowController = [[FTMPreferencesWindowController alloc] initWithProfileStore:self.profileStore
-                                                                                               importer:self.soundPackImporter
-                                                                                           soundResolver:self.soundResolver
-                                                                                             soundPlayer:self.soundPlayer];
-        __weak typeof(self) weakSelf = self;
-        self.preferencesWindowController.onProfilesChanged = ^{
-            __strong typeof(weakSelf) self = weakSelf;
-            if (!self) { return; }
-            [self.soundResolver invalidateCache];
-            [self setMenuItems];
-        };
-        self.preferencesWindowController.onSettingsChanged = ^{
-            __strong typeof(weakSelf) self = weakSelf;
-            if (!self) { return; }
-            self.isMuted = [[NSUserDefaults standardUserDefaults] boolForKey:FTMDefaultsKeyMuted];
-            [self setMenuItems];
-        };
-    }
-
+    [self ensurePreferencesWindowController];
     [self.preferencesWindowController presentWindow];
 }
 
-- (void)showAppRoutingWindow:(id)sender {
-    (void)sender;
-    [self showPreferencesWindow:nil];
-    [self.preferencesWindowController showAppRoutingWindow];
+- (void)showPreferencesWindowSelectingSection:(NSString *)sectionIdentifier {
+    [self ensurePreferencesWindowController];
+    [self.preferencesWindowController presentWindowSelectingSection:sectionIdentifier];
 }
 
-- (void)requestAccessibilityAccess:(id)sender {
+- (void)openPermissionSetupFromMenu:(id)sender {
     (void)sender;
-    [self requestKeyboardAccess:nil];
+    [self showPreferencesWindowSelectingSection:FTMPreferencesSectionBehavior];
 }
 
-- (void)requestKeyboardAccess:(id)sender {
-    (void)sender;
-    [self requestInputMonitoringAccessPrompting:YES];
-    [self requestAccessibilityAccessPrompting:YES];
-    [self refreshGlobalKeyMonitor];
-    [self setMenuItems];
+- (void)maybePresentFirstLaunchSetupPrompt {
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    BOOL alreadyPrompted = [defaults boolForKey:FTMDefaultsKeyDidShowPermissionsSetupPrompt];
+    BOOL accessibilityGranted = [self hasAccessibilityAccess];
+    BOOL inputMonitoringGranted = [self hasInputMonitoringAccess];
 
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        [self refreshGlobalKeyMonitor];
-        [self setMenuItems];
-        [self.preferencesWindowController reloadAllUI];
-    });
+    if (!FTMShouldPresentFirstLaunchSetupPrompt(alreadyPrompted, accessibilityGranted, inputMonitoringGranted)) {
+        return;
+    }
+
+    [defaults setBool:YES forKey:FTMDefaultsKeyDidShowPermissionsSetupPrompt];
+
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.alertStyle = NSAlertStyleInformational;
+    alert.messageText = @"Finish Setup for Global Typing Sounds";
+    alert.informativeText = @"MacOSTypingSounds needs Accessibility and Input Monitoring permissions for global keyboard playback. Open App Behavior settings to complete setup.";
+    [alert addButtonWithTitle:@"Open App Behavior"];
+    [alert addButtonWithTitle:@"Later"];
+
+    if ([alert runModal] == NSAlertFirstButtonReturn) {
+        [self showPreferencesWindowSelectingSection:FTMPreferencesSectionBehavior];
+    }
 }
 
 #pragma mark - App Launch/Quit Sounds
@@ -351,7 +423,7 @@
 - (void)applicationActivated:(NSNotification *)notification {
     (void)notification;
     [self refreshGlobalKeyMonitor];
-    [self setMenuItems];
+    [self setMenuItemsShowingRouteLine:NO];
     [self.preferencesWindowController reloadAllUI];
 }
 
@@ -375,7 +447,7 @@
     });
 }
 
-#pragma mark - Accessibility
+#pragma mark - Permissions
 
 - (BOOL)hasAccessibilityAccess {
     return AXIsProcessTrusted();
@@ -389,7 +461,7 @@
 }
 
 - (BOOL)hasKeyboardMonitoringAccess {
-    return ([[self missingKeyboardAccessComponents] count] == 0);
+    return (self.missingKeyboardAccessComponents.count == 0);
 }
 
 - (BOOL)requestAccessibilityAccessPrompting:(BOOL)shouldPrompt {
@@ -407,6 +479,28 @@
     return YES;
 }
 
+- (BOOL)isAccessibilityPermissionGranted {
+    return [self hasAccessibilityAccess];
+}
+
+- (BOOL)isInputMonitoringPermissionGranted {
+    return [self hasInputMonitoringAccess];
+}
+
+- (void)requestAccessibilityPermission {
+    [self requestAccessibilityAccessPrompting:YES];
+    [self refreshGlobalKeyMonitor];
+    [self setMenuItemsShowingRouteLine:NO];
+    [self.preferencesWindowController reloadAllUI];
+}
+
+- (void)requestInputMonitoringPermission {
+    [self requestInputMonitoringAccessPrompting:YES];
+    [self refreshGlobalKeyMonitor];
+    [self setMenuItemsShowingRouteLine:NO];
+    [self.preferencesWindowController reloadAllUI];
+}
+
 #pragma mark - Routing
 
 - (FTMProfile *)effectiveTypingProfileForFrontmostApp {
@@ -415,24 +509,31 @@
     if (assigned) {
         return assigned;
     }
+
     BOOL assignedAppsOnly = FTMReadAssignedAppsOnlyFromDefaults([NSUserDefaults standardUserDefaults]);
     if (assignedAppsOnly) {
         return nil;
     }
+
     return [self.profileStore activeProfile];
 }
 
 - (NSString *)currentRouteStatusTitle {
     NSRunningApplication *frontmost = [[NSWorkspace sharedWorkspace] frontmostApplication];
-    NSString *appName = frontmost.localizedName.length ? frontmost.localizedName : (frontmost.bundleIdentifier.length ? frontmost.bundleIdentifier : @"(No Active App)");
+    NSString *appName = frontmost.localizedName.length
+        ? frontmost.localizedName
+        : (frontmost.bundleIdentifier.length ? frontmost.bundleIdentifier : @"(No Active App)");
+
     FTMProfile *assigned = [self.profileStore assignedProfileForBundleIdentifier:frontmost.bundleIdentifier ?: @""];
     if (assigned) {
         return [NSString stringWithFormat:@"Current App: %@ -> %@", appName, assigned.name ?: @"Profile"];
     }
+
     BOOL assignedAppsOnly = FTMReadAssignedAppsOnlyFromDefaults([NSUserDefaults standardUserDefaults]);
     if (assignedAppsOnly) {
         return [NSString stringWithFormat:@"Current App: %@ -> Silent (Unassigned App)", appName];
     }
+
     FTMProfile *fallback = [self.profileStore activeProfile];
     return [NSString stringWithFormat:@"Current App: %@ -> Default Profile (%@)", appName, fallback.name ?: @"Profile"];
 }

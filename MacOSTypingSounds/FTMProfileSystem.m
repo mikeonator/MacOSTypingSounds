@@ -2,6 +2,9 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
+
+#import <AudioToolbox/AudioToolbox.h>
 
 #import "ThirdParty/stb_vorbis.c"
 
@@ -27,6 +30,10 @@ static NSString * const FTMProfilesFileName = @"profiles.plist";
 static NSString * const FTMProfilesDirectoryName = @"Profiles";
 static NSString * const FTMProfileConfigFileName = @"profile-config.plist";
 static NSString * const FTMProfileAssetsDirectoryName = @"Assets";
+static NSString * const FTMDefaultPacksDirectoryName = @"DefaultPacks";
+static NSString * const FTMDefaultPackManifestFileName = @"pack-manifest";
+static NSString * const FTMDefaultPackManifestExtension = @"plist";
+static NSString * const FTMDefaultPackAssetsDirectoryName = @"Assets";
 static NSInteger const FTMProfilesSchemaVersion = 3;
 static NSInteger const FTMProfileConfigSchemaVersion = 1;
 
@@ -381,26 +388,186 @@ static BOOL FTMConvertOggVorbisToWav(NSURL *oggURL, NSURL *wavURL, NSError **err
     return ok;
 }
 
-static NSString *FTMSlotFallbackBundleResourceName(NSString *slotID) {
-    if ([slotID isEqualToString:FTMSoundSlotEnter]) {
-        return @"kenter";
+static BOOL FTMConvertOggUsingCoreAudioToWav(NSURL *oggURL, NSURL *wavURL, NSError **error) {
+    ExtAudioFileRef extFile = NULL;
+    OSStatus status = ExtAudioFileOpenURL((__bridge CFURLRef)oggURL, &extFile);
+    if (status != noErr || !extFile) {
+        if (error) {
+            *error = FTMMakeError(FTMProfileSystemErrorOggDecodeFailed,
+                                  [NSString stringWithFormat:@"Failed to decode OGG file %@ (CoreAudio OSStatus %d).",
+                                   oggURL.lastPathComponent, (int)status]);
+        }
+        return NO;
     }
-    if ([slotID isEqualToString:FTMSoundSlotLaunch]) {
-        return @"poweron";
+
+    AudioStreamBasicDescription sourceFormat = {0};
+    UInt32 sourceFormatSize = sizeof(sourceFormat);
+    status = ExtAudioFileGetProperty(extFile, kExtAudioFileProperty_FileDataFormat, &sourceFormatSize, &sourceFormat);
+    if (status != noErr || sourceFormat.mChannelsPerFrame == 0 || sourceFormat.mSampleRate <= 0) {
+        ExtAudioFileDispose(extFile);
+        if (error) {
+            *error = FTMMakeError(FTMProfileSystemErrorOggDecodeFailed,
+                                  [NSString stringWithFormat:@"Invalid OGG audio format for %@ (CoreAudio OSStatus %d).",
+                                   oggURL.lastPathComponent, (int)status]);
+        }
+        return NO;
     }
-    if ([slotID isEqualToString:FTMSoundSlotQuit]) {
-        return @"poweroff";
+
+    AudioStreamBasicDescription clientFormat = {0};
+    clientFormat.mSampleRate = sourceFormat.mSampleRate;
+    clientFormat.mFormatID = kAudioFormatLinearPCM;
+    clientFormat.mFormatFlags = kAudioFormatFlagIsSignedInteger | kAudioFormatFlagIsPacked;
+    clientFormat.mBitsPerChannel = 16;
+    clientFormat.mChannelsPerFrame = sourceFormat.mChannelsPerFrame;
+    clientFormat.mFramesPerPacket = 1;
+    clientFormat.mBytesPerFrame = (clientFormat.mBitsPerChannel / 8) * clientFormat.mChannelsPerFrame;
+    clientFormat.mBytesPerPacket = clientFormat.mBytesPerFrame;
+
+    status = ExtAudioFileSetProperty(extFile, kExtAudioFileProperty_ClientDataFormat, sizeof(clientFormat), &clientFormat);
+    if (status != noErr) {
+        ExtAudioFileDispose(extFile);
+        if (error) {
+            *error = FTMMakeError(FTMProfileSystemErrorOggDecodeFailed,
+                                  [NSString stringWithFormat:@"Failed configuring OGG decoder for %@ (CoreAudio OSStatus %d).",
+                                   oggURL.lastPathComponent, (int)status]);
+        }
+        return NO;
     }
-    return nil;
+
+    NSMutableData *pcmData = [NSMutableData data];
+    const UInt32 framesPerChunk = 4096;
+    const UInt32 bytesPerFrame = clientFormat.mBytesPerFrame;
+
+    while (YES) {
+        UInt32 framesToRead = framesPerChunk;
+        NSMutableData *chunk = [NSMutableData dataWithLength:(NSUInteger)framesPerChunk * bytesPerFrame];
+        AudioBufferList bufferList = {0};
+        bufferList.mNumberBuffers = 1;
+        bufferList.mBuffers[0].mNumberChannels = clientFormat.mChannelsPerFrame;
+        bufferList.mBuffers[0].mDataByteSize = (UInt32)chunk.length;
+        bufferList.mBuffers[0].mData = chunk.mutableBytes;
+
+        status = ExtAudioFileRead(extFile, &framesToRead, &bufferList);
+        if (status != noErr) {
+            ExtAudioFileDispose(extFile);
+            if (error) {
+                *error = FTMMakeError(FTMProfileSystemErrorOggDecodeFailed,
+                                      [NSString stringWithFormat:@"Failed reading OGG file %@ (CoreAudio OSStatus %d).",
+                                       oggURL.lastPathComponent, (int)status]);
+            }
+            return NO;
+        }
+
+        if (framesToRead == 0) {
+            break;
+        }
+
+        NSUInteger bytesRead = (NSUInteger)framesToRead * bytesPerFrame;
+        [pcmData appendBytes:chunk.bytes length:bytesRead];
+    }
+
+    ExtAudioFileDispose(extFile);
+
+    if (pcmData.length == 0) {
+        if (error) {
+            *error = FTMMakeError(FTMProfileSystemErrorOggDecodeFailed,
+                                  [NSString stringWithFormat:@"Decoded OGG audio was empty: %@", oggURL.lastPathComponent]);
+        }
+        return NO;
+    }
+
+    uint64_t totalSamples64 = ((uint64_t)pcmData.length) / sizeof(short);
+    if (totalSamples64 > INT_MAX) {
+        if (error) {
+            *error = FTMMakeError(FTMProfileSystemErrorOggDecodeFailed,
+                                  @"Decoded OGG audio is too large to import.");
+        }
+        return NO;
+    }
+
+    int channels = (int)clientFormat.mChannelsPerFrame;
+    int sampleRate = (int)clientFormat.mSampleRate;
+    int samplesPerChannel = channels > 0 ? (int)(totalSamples64 / (uint64_t)channels) : 0;
+    return FTMWritePCM16WAV(wavURL, (const short *)pcmData.bytes, samplesPerChannel, channels, sampleRate, error);
 }
 
-static NSArray<NSString *> *FTMBuiltinTypingResourceNames(void) {
-    static NSArray<NSString *> *names;
+static NSArray<NSString *> *FTMBundledDefaultPackDirectoryNames(void) {
+    static NSArray<NSString *> *directories;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
-        names = @[@"k2", @"k3", @"k4"];
+        directories = @[@"FalloutClassic", @"Cyberpunk", @"Minecraft"];
     });
-    return names;
+    return directories;
+}
+
+static NSString *FTMDefaultPackManifestSubdirectory(NSString *packDirectoryName) {
+    if (packDirectoryName.length == 0) {
+        return FTMDefaultPacksDirectoryName;
+    }
+    return [NSString stringWithFormat:@"%@/%@", FTMDefaultPacksDirectoryName, packDirectoryName];
+}
+
+static NSString *FTMDefaultPackAssetsSubdirectory(NSString *packDirectoryName) {
+    NSString *manifestSubdir = FTMDefaultPackManifestSubdirectory(packDirectoryName);
+    return [manifestSubdir stringByAppendingPathComponent:FTMDefaultPackAssetsDirectoryName];
+}
+
+static NSURL *FTMDefaultPackAssetURLInBundle(NSBundle *bundle, NSString *packDirectoryName, NSString *fileName) {
+    if (!bundle || packDirectoryName.length == 0 || fileName.length == 0) {
+        return nil;
+    }
+    NSString *baseName = [fileName stringByDeletingPathExtension];
+    NSString *extension = [fileName pathExtension];
+    NSString *subdirectory = FTMDefaultPackAssetsSubdirectory(packDirectoryName);
+    return [bundle URLForResource:baseName
+                    withExtension:(extension.length ? extension : nil)
+                     subdirectory:subdirectory];
+}
+
+static NSString *FTMDefaultPackAssetPathInBundle(NSBundle *bundle, NSString *packDirectoryName, NSString *fileName) {
+    if (!bundle || packDirectoryName.length == 0 || fileName.length == 0) {
+        return nil;
+    }
+    NSString *baseName = [fileName stringByDeletingPathExtension];
+    NSString *extension = [fileName pathExtension];
+    NSString *subdirectory = FTMDefaultPackAssetsSubdirectory(packDirectoryName);
+    return [bundle pathForResource:baseName
+                            ofType:(extension.length ? extension : nil)
+                       inDirectory:subdirectory];
+}
+
+static NSDictionary<NSString *, NSArray<NSString *> *> *FTMDefaultPackFallbackPathsBySlot(NSBundle *bundle, NSString *packDirectoryName) {
+    if (!bundle || packDirectoryName.length == 0) {
+        return @{};
+    }
+
+    NSURL *manifestURL = [bundle URLForResource:FTMDefaultPackManifestFileName
+                                  withExtension:FTMDefaultPackManifestExtension
+                                   subdirectory:FTMDefaultPackManifestSubdirectory(packDirectoryName)];
+    NSDictionary *manifest = [NSDictionary dictionaryWithContentsOfURL:manifestURL];
+    if (![manifest isKindOfClass:[NSDictionary class]]) {
+        return @{};
+    }
+
+    NSDictionary *slotAssignments = [manifest[@"slotAssignments"] isKindOfClass:[NSDictionary class]]
+        ? manifest[@"slotAssignments"]
+        : @{};
+    NSMutableDictionary<NSString *, NSArray<NSString *> *> *resolved = [NSMutableDictionary dictionary];
+    for (NSString *slotID in FTMAllSoundSlotIDs()) {
+        NSArray *fileNames = [slotAssignments[slotID] isKindOfClass:[NSArray class]] ? slotAssignments[slotID] : @[];
+        NSMutableArray<NSString *> *slotPaths = [NSMutableArray array];
+        for (id fileName in fileNames) {
+            if (![fileName isKindOfClass:[NSString class]]) {
+                continue;
+            }
+            NSString *path = FTMDefaultPackAssetPathInBundle(bundle, packDirectoryName, fileName);
+            if (path.length > 0) {
+                [slotPaths addObject:path];
+            }
+        }
+        resolved[slotID] = [slotPaths copy];
+    }
+    return [resolved copy];
 }
 
 static NSString *FTMUniqueProfileName(NSString *desiredName, NSArray<FTMProfile *> *existingProfiles, NSString *excludingProfileID) {
@@ -437,6 +604,12 @@ static NSString *FTMUniqueProfileName(NSString *desiredName, NSArray<FTMProfile 
 @property (nonatomic, strong) NSFileManager *fileManager;
 @property (nonatomic, strong) NSMutableArray<FTMProfile *> *mutableProfiles;
 @property (nonatomic, strong) NSMutableArray<FTMAppProfileRule *> *mutableAppRules;
+
+- (BOOL)seedBundledDefaultPacksIfNeeded:(NSError * _Nullable __autoreleasing *)error;
+- (BOOL)seedProfileFromBundledManifest:(NSDictionary *)manifest
+                         packDirectory:(NSString *)packDirectory
+                                 error:(NSError * _Nullable __autoreleasing *)error;
+- (BOOL)createFallbackDefaultProfile:(NSError * _Nullable __autoreleasing *)error;
 @end
 
 @implementation FTMProfile
@@ -662,15 +835,21 @@ static NSString *FTMUniqueProfileName(NSString *desiredName, NSArray<FTMProfile 
         NSString *baseName = [[sourceURL lastPathComponent] stringByDeletingPathExtension];
         if ([extension isEqualToString:@"ogg"]) {
             NSURL *destURL = FTMUniqueDestinationURL(slotDirectoryURL, baseName, @"wav", _fileManager);
-            NSError *oggError = nil;
-            if (!FTMConvertOggVorbisToWav(sourceURL, destURL, &oggError)) {
-                if (error) {
-                    *error = oggError ?: FTMMakeError(FTMProfileSystemErrorOggDecodeFailed,
-                                                     [NSString stringWithFormat:@"Failed to import OGG file %@", sourceURL.lastPathComponent]);
-                }
-                return NO;
+            NSError *vorbisError = nil;
+            if (FTMConvertOggVorbisToWav(sourceURL, destURL, &vorbisError)) {
+                continue;
             }
-            continue;
+
+            NSError *coreAudioError = nil;
+            if (FTMConvertOggUsingCoreAudioToWav(sourceURL, destURL, &coreAudioError)) {
+                continue;
+            }
+
+            if (error) {
+                *error = coreAudioError ?: vorbisError ?: FTMMakeError(FTMProfileSystemErrorOggDecodeFailed,
+                                                                       [NSString stringWithFormat:@"Failed to import OGG file %@", sourceURL.lastPathComponent]);
+            }
+            return NO;
         }
 
         if (!FTMValidateNativeAudioAtURL(sourceURL)) {
@@ -769,13 +948,20 @@ static NSString *FTMUniqueProfileName(NSString *desiredName, NSArray<FTMProfile 
     NSString *baseName = preferredName.length ? preferredName : [[sourceURL lastPathComponent] stringByDeletingPathExtension];
     if ([sourceExt isEqualToString:@"ogg"]) {
         NSURL *destURL = FTMUniqueDestinationURL(destinationDirectoryURL, baseName, @"wav", _fileManager);
-        NSError *oggError = nil;
-        if (!FTMConvertOggVorbisToWav(sourceURL, destURL, &oggError)) {
-            if (error) { *error = oggError; }
-            return nil;
+        NSError *vorbisError = nil;
+        if (FTMConvertOggVorbisToWav(sourceURL, destURL, &vorbisError)) {
+            if (sourceExtensionOut) { *sourceExtensionOut = sourceExt; }
+            return destURL;
         }
-        if (sourceExtensionOut) { *sourceExtensionOut = sourceExt; }
-        return destURL;
+
+        NSError *coreAudioError = nil;
+        if (FTMConvertOggUsingCoreAudioToWav(sourceURL, destURL, &coreAudioError)) {
+            if (sourceExtensionOut) { *sourceExtensionOut = sourceExt; }
+            return destURL;
+        }
+
+        if (error) { *error = coreAudioError ?: vorbisError; }
+        return nil;
     }
 
     if (!FTMValidateNativeAudioAtURL(sourceURL)) {
@@ -860,8 +1046,11 @@ static NSString *FTMUniqueProfileName(NSString *desiredName, NSArray<FTMProfile 
         }
     }
 
+    if (![self seedBundledDefaultPacksIfNeeded:error]) {
+        return NO;
+    }
     if (self.mutableProfiles.count == 0) {
-        if (![self createBuiltInDefaultProfile:error]) {
+        if (![self createFallbackDefaultProfile:error]) {
             return NO;
         }
     }
@@ -1067,7 +1256,10 @@ static NSString *FTMUniqueProfileName(NSString *desiredName, NSArray<FTMProfile 
     }
 
     if (self.mutableProfiles.count == 0) {
-        if (![self createBuiltInDefaultProfile:error]) {
+        if (![self seedBundledDefaultPacksIfNeeded:error]) {
+            return NO;
+        }
+        if (self.mutableProfiles.count == 0 && ![self createFallbackDefaultProfile:error]) {
             return NO;
         }
     }
@@ -1653,9 +1845,70 @@ static NSString *FTMUniqueProfileName(NSString *desiredName, NSArray<FTMProfile 
     }
     NSURL *configURL = [self profileConfigURLForProfile:profile];
     if ([self.fileManager fileExistsAtPath:configURL.path]) {
+        return [self migrateStoredOggAssetsToWavForProfile:profile error:error];
+    }
+    if (![self migrateLegacySlotFoldersIntoProfileConfigForProfile:profile error:error]) {
+        return NO;
+    }
+    return [self migrateStoredOggAssetsToWavForProfile:profile error:error];
+}
+
+- (BOOL)migrateStoredOggAssetsToWavForProfile:(FTMProfile *)profile error:(NSError * _Nullable __autoreleasing *)error {
+    NSMutableDictionary *config = [self mutableProfileConfigForProfile:profile createIfMissing:YES error:error];
+    if (!config) {
+        return NO;
+    }
+
+    NSMutableArray *assets = [config[@"assets"] mutableCopy] ?: [NSMutableArray array];
+    NSURL *assetsDir = [self assetsDirectoryURLForProfile:profile];
+    BOOL changed = NO;
+
+    for (NSUInteger idx = 0; idx < assets.count; idx++) {
+        id entry = assets[idx];
+        if (![entry isKindOfClass:[NSDictionary class]]) {
+            continue;
+        }
+        NSMutableDictionary *assetDict = [entry mutableCopy];
+        NSString *storedFileName = [assetDict[@"storedFileName"] isKindOfClass:[NSString class]] ? assetDict[@"storedFileName"] : nil;
+        if (storedFileName.length == 0) {
+            continue;
+        }
+        if (![[storedFileName.pathExtension lowercaseString] isEqualToString:@"ogg"]) {
+            continue;
+        }
+
+        NSURL *sourceURL = [assetsDir URLByAppendingPathComponent:storedFileName];
+        if (![self.fileManager fileExistsAtPath:sourceURL.path]) {
+            continue;
+        }
+
+        NSString *baseName = [storedFileName stringByDeletingPathExtension];
+        NSURL *destURL = FTMUniqueDestinationURL(assetsDir, baseName, @"wav", self.fileManager);
+        NSError *decodeError = nil;
+        BOOL converted = FTMConvertOggVorbisToWav(sourceURL, destURL, &decodeError) ||
+                         FTMConvertOggUsingCoreAudioToWav(sourceURL, destURL, &decodeError);
+        if (!converted) {
+            [self.fileManager removeItemAtURL:destURL error:nil];
+            continue;
+        }
+
+        [self.fileManager removeItemAtURL:sourceURL error:nil];
+        if (destURL.lastPathComponent.length > 0) {
+            assetDict[@"storedFileName"] = destURL.lastPathComponent;
+            assets[idx] = assetDict;
+            changed = YES;
+        }
+    }
+
+    if (!changed) {
         return YES;
     }
-    return [self migrateLegacySlotFoldersIntoProfileConfigForProfile:profile error:error];
+
+    config[@"assets"] = assets;
+    if (![self saveProfileConfig:config forProfile:profile error:error]) {
+        return NO;
+    }
+    return [self touchProfile:profile error:error];
 }
 
 - (BOOL)migrateLegacySlotFoldersIntoProfileConfigForProfile:(FTMProfile *)profile error:(NSError * _Nullable __autoreleasing *)error {
@@ -1769,49 +2022,183 @@ static NSString *FTMUniqueProfileName(NSString *desiredName, NSArray<FTMProfile 
     return ok;
 }
 
-- (BOOL)createBuiltInDefaultProfile:(NSError * _Nullable __autoreleasing *)error {
-    FTMProfile *profile = [self createEmptyProfileNamed:@"Fallout Classic" error:error];
+- (nullable FTMProfile *)profileNamedCaseInsensitive:(NSString *)name {
+    if (name.length == 0) {
+        return nil;
+    }
+    NSString *needle = [[name stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] lowercaseString];
+    if (needle.length == 0) {
+        return nil;
+    }
+    for (FTMProfile *profile in self.mutableProfiles) {
+        NSString *candidate = [[profile.name ?: @"" stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] lowercaseString];
+        if ([candidate isEqualToString:needle]) {
+            return profile;
+        }
+    }
+    return nil;
+}
+
+- (BOOL)seedBundledDefaultPacksIfNeeded:(NSError * _Nullable __autoreleasing *)error {
+    BOOL hasBundledManifests = NO;
+    for (NSString *packDirectory in FTMBundledDefaultPackDirectoryNames()) {
+        NSURL *manifestURL = [self.bundle URLForResource:FTMDefaultPackManifestFileName
+                                           withExtension:FTMDefaultPackManifestExtension
+                                            subdirectory:FTMDefaultPackManifestSubdirectory(packDirectory)];
+        if (!manifestURL) {
+            continue;
+        }
+        hasBundledManifests = YES;
+
+        NSDictionary *manifest = [NSDictionary dictionaryWithContentsOfURL:manifestURL];
+        if (![manifest isKindOfClass:[NSDictionary class]]) {
+            if (error) {
+                *error = FTMMakeError(FTMProfileSystemErrorInvalidSoundPack,
+                                      [NSString stringWithFormat:@"Bundled default pack manifest is invalid: %@", manifestURL.lastPathComponent]);
+            }
+            return NO;
+        }
+
+        NSString *displayName = [manifest[@"displayName"] isKindOfClass:[NSString class]] ? manifest[@"displayName"] : @"";
+        if (displayName.length == 0) {
+            if (error) {
+                *error = FTMMakeError(FTMProfileSystemErrorInvalidSoundPack,
+                                      [NSString stringWithFormat:@"Bundled default pack is missing displayName: %@", packDirectory]);
+            }
+            return NO;
+        }
+        if ([self profileNamedCaseInsensitive:displayName]) {
+            continue;
+        }
+        if (![self seedProfileFromBundledManifest:manifest packDirectory:packDirectory error:error]) {
+            return NO;
+        }
+    }
+    (void)hasBundledManifests;
+    return YES;
+}
+
+- (BOOL)seedProfileFromBundledManifest:(NSDictionary *)manifest
+                         packDirectory:(NSString *)packDirectory
+                                 error:(NSError * _Nullable __autoreleasing *)error {
+    NSString *displayName = [manifest[@"displayName"] isKindOfClass:[NSString class]] ? manifest[@"displayName"] : @"";
+    if (displayName.length == 0) {
+        if (error) {
+            *error = FTMMakeError(FTMProfileSystemErrorInvalidSoundPack, @"Bundled default pack is missing a display name.");
+        }
+        return NO;
+    }
+
+    FTMProfile *profile = [self createEmptyProfileNamed:displayName error:error];
     if (!profile) {
         return NO;
     }
 
-    NSMutableArray<NSURL *> *typingURLs = [NSMutableArray array];
-    for (NSString *resourceName in FTMBuiltinTypingResourceNames()) {
-        NSURL *url = [self.bundle URLForResource:resourceName withExtension:@"mp3"];
-        if (url) { [typingURLs addObject:url]; }
+    NSMutableDictionary *config = [self mutableProfileConfigForProfile:profile createIfMissing:YES error:error];
+    if (!config) {
+        [self.mutableProfiles removeObject:profile];
+        [self.fileManager removeItemAtURL:[self profileDirectoryURLForProfile:profile] error:nil];
+        [self saveMetadata:nil];
+        return NO;
     }
 
-    FTMSoundPackImporter *importer = [[FTMSoundPackImporter alloc] init];
-    NSArray<NSString *> *warnings = nil;
-    if (typingURLs.count > 0) {
-        if (![self addAudioFilesAtURLs:typingURLs
-                              toSlotID:FTMSoundSlotTyping
-                               profile:profile
-                              importer:importer
-                              warnings:&warnings
-                                 error:error]) {
+    NSArray *assetEntries = [manifest[@"assets"] isKindOfClass:[NSArray class]] ? manifest[@"assets"] : @[];
+    NSDictionary *slotAssignmentManifest = [manifest[@"slotAssignments"] isKindOfClass:[NSDictionary class]] ? manifest[@"slotAssignments"] : @{};
+    NSURL *destinationAssetsDirectory = [self assetsDirectoryURLForProfile:profile];
+
+    NSMutableArray<NSDictionary *> *assets = [NSMutableArray arrayWithCapacity:assetEntries.count];
+    NSMutableDictionary<NSString *, NSString *> *assetIDByFileName = [NSMutableDictionary dictionaryWithCapacity:assetEntries.count];
+
+    for (id entry in assetEntries) {
+        if (![entry isKindOfClass:[NSDictionary class]]) {
+            continue;
+        }
+        NSString *fileName = [entry[@"fileName"] isKindOfClass:[NSString class]] ? entry[@"fileName"] : @"";
+        if (fileName.length == 0) {
+            continue;
+        }
+
+        NSURL *sourceURL = FTMDefaultPackAssetURLInBundle(self.bundle, packDirectory, fileName);
+        if (!sourceURL) {
+            if (error) {
+                *error = FTMMakeError(FTMProfileSystemErrorInvalidSoundPack,
+                                      [NSString stringWithFormat:@"Bundled asset not found for pack '%@': %@", displayName, fileName]);
+            }
+            [self.mutableProfiles removeObject:profile];
+            [self.fileManager removeItemAtURL:[self profileDirectoryURLForProfile:profile] error:nil];
+            [self saveMetadata:nil];
             return NO;
         }
-    }
 
-    NSArray<NSDictionary *> *singletons = @[
-        @{@"slot": FTMSoundSlotEnter, @"name": @"kenter", @"ext": @"mp3"},
-        @{@"slot": FTMSoundSlotLaunch, @"name": @"poweron", @"ext": @"mp3"},
-        @{@"slot": FTMSoundSlotQuit, @"name": @"poweroff", @"ext": @"mp3"},
-    ];
-    for (NSDictionary *entry in singletons) {
-        NSURL *url = [self.bundle URLForResource:entry[@"name"] withExtension:entry[@"ext"]];
-        if (url) {
-            [self addAudioFilesAtURLs:@[url]
-                             toSlotID:entry[@"slot"]
-                              profile:profile
-                             importer:importer
-                             warnings:nil
-                                error:nil];
+        NSURL *destinationURL = [destinationAssetsDirectory URLByAppendingPathComponent:fileName];
+        NSError *copyError = nil;
+        if ([self.fileManager fileExistsAtPath:destinationURL.path] &&
+            ![self.fileManager removeItemAtURL:destinationURL error:&copyError]) {
+            if (error) { *error = copyError; }
+            [self.mutableProfiles removeObject:profile];
+            [self.fileManager removeItemAtURL:[self profileDirectoryURLForProfile:profile] error:nil];
+            [self saveMetadata:nil];
+            return NO;
         }
+        if (![self.fileManager copyItemAtURL:sourceURL toURL:destinationURL error:&copyError]) {
+            if (error) { *error = copyError; }
+            [self.mutableProfiles removeObject:profile];
+            [self.fileManager removeItemAtURL:[self profileDirectoryURLForProfile:profile] error:nil];
+            [self saveMetadata:nil];
+            return NO;
+        }
+
+        FTMProfileAsset *asset = [[FTMProfileAsset alloc] init];
+        asset.assetID = [[NSUUID UUID] UUIDString];
+        asset.displayName = [entry[@"displayName"] isKindOfClass:[NSString class]] ? entry[@"displayName"] : fileName;
+        asset.storedFileName = fileName;
+        asset.importedAt = [NSDate date];
+        NSString *sourceExtension = [entry[@"sourceExtension"] isKindOfClass:[NSString class]]
+            ? entry[@"sourceExtension"]
+            : [[fileName pathExtension] lowercaseString];
+        asset.sourceExtension = sourceExtension.length > 0 ? sourceExtension : nil;
+
+        [assets addObject:[asset dictionaryRepresentation]];
+        assetIDByFileName[fileName] = asset.assetID;
     }
 
-    profile.updatedAt = [NSDate date];
+    NSMutableDictionary<NSString *, NSMutableArray<NSString *> *> *slotAssignments = [NSMutableDictionary dictionary];
+    for (NSString *slotID in FTMAllSoundSlotIDs()) {
+        NSArray *slotFileNames = [slotAssignmentManifest[slotID] isKindOfClass:[NSArray class]] ? slotAssignmentManifest[slotID] : @[];
+        NSMutableArray<NSString *> *slotAssetIDs = [NSMutableArray array];
+        for (id fileName in slotFileNames) {
+            if (![fileName isKindOfClass:[NSString class]]) {
+                continue;
+            }
+            NSString *assetID = assetIDByFileName[fileName];
+            if (assetID.length > 0) {
+                [slotAssetIDs addObject:assetID];
+            }
+        }
+        slotAssignments[slotID] = slotAssetIDs;
+    }
+    [self normalizeSlotAssignmentsDictionary:slotAssignments];
+
+    config[@"assets"] = assets;
+    config[@"slotAssignments"] = slotAssignments;
+    if (![self saveProfileConfig:config forProfile:profile error:error] || ![self touchProfile:profile error:error]) {
+        [self.mutableProfiles removeObject:profile];
+        [self.fileManager removeItemAtURL:[self profileDirectoryURLForProfile:profile] error:nil];
+        [self saveMetadata:nil];
+        return NO;
+    }
+
+    return YES;
+}
+
+- (BOOL)createFallbackDefaultProfile:(NSError * _Nullable __autoreleasing *)error {
+    if (self.mutableProfiles.count > 0) {
+        return YES;
+    }
+    FTMProfile *profile = [self createEmptyProfileNamed:@"Default Profile" error:error];
+    if (!profile) {
+        return NO;
+    }
     [self.defaults setObject:profile.profileID forKey:FTMDefaultsKeyActiveProfileID];
     return YES;
 }
@@ -1822,6 +2209,7 @@ static NSString *FTMUniqueProfileName(NSString *desiredName, NSArray<FTMProfile 
 @property (nonatomic, strong) FTMProfileStore *profileStore;
 @property (nonatomic, strong) NSBundle *bundle;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, NSDictionary<NSString *, NSArray<NSString *> *> *> *cachedSlotsByProfileID;
+@property (nonatomic, strong) NSDictionary<NSString *, NSArray<NSString *> *> *bundledFallbackSlotsByID;
 @end
 
 @implementation FTMSoundResolver
@@ -1832,6 +2220,7 @@ static NSString *FTMUniqueProfileName(NSString *desiredName, NSArray<FTMProfile 
         _profileStore = profileStore;
         _bundle = bundle ?: [NSBundle mainBundle];
         _cachedSlotsByProfileID = [NSMutableDictionary dictionary];
+        _bundledFallbackSlotsByID = FTMDefaultPackFallbackPathsBySlot(_bundle, @"FalloutClassic");
     }
     return self;
 }
@@ -1889,15 +2278,13 @@ static NSString *FTMUniqueProfileName(NSString *desiredName, NSArray<FTMProfile 
         return paths[idx];
     }
 
-    NSString *fallbackSpecific = FTMSlotFallbackBundleResourceName(slotID);
-    if (fallbackSpecific) {
-        return [self.bundle pathForResource:fallbackSpecific ofType:@"mp3"];
+    NSArray<NSString *> *fallbackPaths = self.bundledFallbackSlotsByID[slotID];
+    if (fallbackPaths.count == 0 && ![slotID isEqualToString:FTMSoundSlotLaunch] && ![slotID isEqualToString:FTMSoundSlotQuit]) {
+        fallbackPaths = self.bundledFallbackSlotsByID[FTMSoundSlotTyping];
     }
-
-    NSArray<NSString *> *builtins = FTMBuiltinTypingResourceNames();
-    if (builtins.count > 0) {
-        uint32_t idx = arc4random_uniform((uint32_t)builtins.count);
-        return [self.bundle pathForResource:builtins[idx] ofType:@"mp3"];
+    if (fallbackPaths.count > 0) {
+        uint32_t idx = arc4random_uniform((uint32_t)fallbackPaths.count);
+        return fallbackPaths[idx];
     }
 
     return nil;
