@@ -1,5 +1,7 @@
 # MacOSTypingSounds
 
+![AppIcon](Branding/MacOSTypingSoundsIcon-iOS-Dark-1024x1024@1x.png)
+
 Mac menu bar app that plays keyboard and app event sounds with profile-based routing.
 
 Current release target: `v3.0.0`.
